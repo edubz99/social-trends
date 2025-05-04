@@ -4,6 +4,8 @@ import { getAuth, Auth } from 'firebase/auth';
 import { getFirestore, Firestore } from 'firebase/firestore';
 import { getStorage, FirebaseStorage } from 'firebase/storage';
 
+// Ensure environment variables are being read correctly.
+// Check for NEXT_PUBLIC_ prefix for client-side exposure.
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
@@ -23,10 +25,16 @@ let storage: FirebaseStorage;
 let firebaseInitialized = false;
 
 if (typeof window !== 'undefined') { // Ensure this runs only on the client
-    if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
+    // Validate Firebase config more explicitly
+    const missingVars = Object.entries(firebaseConfig)
+      .filter(([key, value]) => !value || value.startsWith('YOUR_'))
+      .map(([key]) => key);
+
+    if (missingVars.length > 0) {
         console.error(
-            'Firebase API Key or Project ID is missing. Check your environment variables (e.g., .env file). ' +
-            'Make sure they are prefixed with NEXT_PUBLIC_ and that the .env file is correctly loaded.'
+            `Firebase configuration is incomplete or uses placeholder values. Missing or invalid environment variables: ${missingVars.join(', ')}. ` +
+            'Please check your .env file and ensure all NEXT_PUBLIC_FIREBASE_* variables are set correctly with your project credentials. ' +
+            'You can find these in your Firebase project settings (Project settings > General > Your apps > Firebase SDK snippet > Config).'
         );
         // Set dummy objects to prevent hard crashes, but Firebase will not work
         app = {} as FirebaseApp;
@@ -41,19 +49,43 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
                 console.log("Firebase initialized successfully.");
             } catch (e) {
                  console.error("Firebase initialization error:", e);
+                 // Provide more context if possible
+                 if ((e as Error).message?.includes('invalid-api-key')) {
+                    console.error("The provided NEXT_PUBLIC_FIREBASE_API_KEY seems invalid. Please double-check it in your .env file and Firebase project settings.");
+                 }
                  app = {} as FirebaseApp; // Assign dummy on error
             }
         } else {
             app = getApp();
-            firebaseInitialized = true; // Already initialized
+            // Ensure services are initialized even if app already exists
+            if (!firebaseInitialized) { // Check if services need init
+                try {
+                    auth = getAuth(app);
+                    db = getFirestore(app);
+                    storage = getStorage(app);
+                    firebaseInitialized = true;
+                    console.log("Firebase services attached to existing app.");
+                 } catch (e) {
+                     console.error("Error attaching Firebase services to existing app:", e);
+                     firebaseInitialized = false;
+                     auth = {} as Auth;
+                     db = {} as Firestore;
+                     storage = {} as FirebaseStorage;
+                 }
+            } else {
+                 // Already initialized in a previous render/context
+            }
         }
 
-        // Initialize services only if app initialization was potentially successful
-        if (firebaseInitialized) {
+        // Initialize services only if app initialization was successful
+        if (firebaseInitialized && (!auth || !db || !storage)) { // Check if services were initialized
             try {
+                // Use getAuth, getFirestore, getStorage which handle initialization safely
                 auth = getAuth(app);
                 db = getFirestore(app);
                 storage = getStorage(app);
+                 if (!firebaseInitialized) console.log("Firebase services initialized."); // Log only if newly initialized
+                 firebaseInitialized = true;
             } catch (e) {
                 console.error("Error initializing Firebase services:", e);
                 // If service init fails (e.g., due to invalid config passed), reset flag and dummies
@@ -62,21 +94,20 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
                 db = {} as Firestore;
                 storage = {} as FirebaseStorage;
             }
-        } else {
-             auth = {} as Auth;
-             db = {} as Firestore;
-             storage = {} as FirebaseStorage;
         }
     }
 
     if (!firebaseInitialized) {
         console.warn(
-           "Firebase is not initialized. Ensure your NEXT_PUBLIC_FIREBASE_* environment variables are set correctly in your .env file."
+           "Firebase is not properly initialized. App functionality requiring Firebase (Auth, Firestore, Storage) will not work. Check console errors for details on missing/invalid configuration."
         );
+        // Ensure dummies are assigned if not initialized
+        auth = auth || {} as Auth;
+        db = db || {} as Firestore;
+        storage = storage || {} as FirebaseStorage;
     }
 } else {
-    // Server-side: You might need a different initialization (e.g., Admin SDK)
-    // or simply provide dummies if client-side Firebase is expected.
+    // Server-side: Provide dummies as client-side Firebase is expected for this setup.
     app = {} as FirebaseApp;
     auth = {} as Auth;
     db = {} as Firestore;
