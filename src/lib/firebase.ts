@@ -29,12 +29,13 @@ let firebaseInitialized = false;
 if (typeof window !== 'undefined') { // Ensure this runs only on the client
     // Validate Firebase config more explicitly
     const missingVars = Object.entries(firebaseConfig)
-      .filter(([key, value]) => key !== 'measurementId' && (!value || value.startsWith('YOUR_') || value.startsWith('AIzaSyC4UAODk-fZgpBm') )) // Added check for placeholder/example key start
+      // Removed check for specific example API key prefix
+      .filter(([key, value]) => key !== 'measurementId' && (!value || value.startsWith('YOUR_')))
       .map(([key]) => `NEXT_PUBLIC_${key.replace(/([A-Z])/g, '_$1').toUpperCase().replace('FIREBASE_','')}`); // Format key name
 
     if (missingVars.length > 0) {
         console.error(
-            `Firebase configuration is incomplete or uses placeholder/example values. Missing or invalid environment variables: ${missingVars.join(', ')}. ` +
+            `Firebase configuration is incomplete or uses placeholder values. Missing or invalid environment variables: ${missingVars.join(', ')}. ` +
             'Please check your .env file and ensure all NEXT_PUBLIC_FIREBASE_* variables are set correctly with your project credentials. ' +
             'You can find these in your Firebase project settings (Project settings > General > Your apps > Firebase SDK snippet > Config).'
         );
@@ -53,7 +54,7 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
                  console.error("Firebase initialization error:", e);
                  // Provide more context if possible
                  if ((e as Error).message?.includes('invalid-api-key') || (e as Error).message?.includes('api-key-not-valid')) {
-                    console.error("The provided NEXT_PUBLIC_FIREBASE_API_KEY seems invalid or is a placeholder/example. Please double-check it in your .env file and Firebase project settings.");
+                    console.error("The provided NEXT_PUBLIC_FIREBASE_API_KEY seems invalid. Please double-check it in your .env file and Firebase project settings.");
                  }
                  app = {} as FirebaseApp; // Assign dummy on error
             }
@@ -116,4 +117,3 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
 
 
 export { app, auth, db, storage, firebaseInitialized };
-
