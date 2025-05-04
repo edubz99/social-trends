@@ -1,1 +1,2 @@
-// Flows will be imported for their side effects in this file.
+import '@/ai/flows/suggest-post-ideas.ts';
+import '@/ai/flows/categorize-trend.ts';
