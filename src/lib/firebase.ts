@@ -46,7 +46,7 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
           // Allow measurementId to be optional
           key !== 'measurementId' &&
           // Check for undefined/null/empty string or common placeholder patterns
-          (!value || value.startsWith('YOUR_') || value.startsWith('PLACEHOLDER_') || value.startsWith('AIza')) // Check for common placeholder/example API key starts
+          (!value || value.startsWith('YOUR_') || value.startsWith('PLACEHOLDER_') || value.startsWith('AIzaSy')) // Check for common placeholder/example API key starts - Updated check
       )
       .map(([key]) => `NEXT_PUBLIC_FIREBASE_${key.replace(/([A-Z])/g, '_$1').toUpperCase()}`); // Format key name like NEXT_PUBLIC_FIREBASE_API_KEY
 
@@ -74,6 +74,24 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
             }
              // Initialize services after ensuring app exists
             auth = getAuth(app);
+
+            // *** IMPORTANT: App Check / reCAPTCHA Error ***
+            // If you see errors like "authInstance._getRecaptchaConfig is not a function"
+            // or related reCAPTCHA issues during login/signup:
+            // 1. Check Firebase Console > Project Settings > App Check.
+            // 2. If App Check IS NOT needed: Ensure it's not enforced for your web app.
+            // 3. If App Check IS needed:
+            //    - Ensure you've registered your web app in App Check.
+            //    - Ensure you've configured the reCAPTCHA v3 provider with VALID Site Key and Secret Key obtained from Google Cloud Console.
+            //    - Ensure your domain (e.g., localhost:xxxx, your deployed domain) is correctly listed.
+            // This error often originates from App Check configuration issues.
+            console.warn(
+                "Firebase Auth: If you encounter '_getRecaptchaConfig is not a function' or similar errors, " +
+                "it strongly suggests an issue with App Check configuration. Verify your App Check setup for the web app in the Firebase Console " +
+                "(Project Settings > App Check > Apps), especially the reCAPTCHA keys and registered sites. If App Check is not intended, ensure enforcement is off."
+             );
+
+
              // Initialize Firestore with persistence enabled using persistentLocalCache
             db = initializeFirestore(app, {
                 ignoreUndefinedProperties: true, // Optional: Recommended for consistency
@@ -94,12 +112,6 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
               "in your Firebase project console (Authentication > Sign-in method). Also ensure your domain is authorized (Authentication > Settings > Authorized domains)."
             );
 
-             // Add warning for App Check issues causing recaptcha errors
-             console.warn(
-                "Firebase Auth: If you encounter '_getRecaptchaConfig is not a function' or similar errors, " +
-                "it might relate to App Check. Ensure App Check is correctly configured for your web app in the Firebase Console " +
-                "(Project Settings > App Check > Apps), including registering the reCAPTCHA keys."
-             );
              // Add warning for unauthorized domains
             console.warn(
                  "Firebase Auth: If you encounter 'auth/unauthorized-domain' errors, ensure the current domain (e.g., localhost, your deployed domain) is listed in the 'Authorized domains' " +
@@ -118,10 +130,10 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
                     "sign-in provider is not enabled in your Firebase project console. Go to Authentication > Sign-in method and enable it."
                  );
              } else if ((e as Error).message?.includes('_getRecaptchaConfig is not a function')) {
+                // This specific check is redundant given the warning above, but kept for explicitness if error is thrown here.
                 console.error(
-                    "Firebase Auth Error related to reCAPTCHA. This might indicate an issue with App Check configuration in your Firebase project. " +
-                    "If using App Check, ensure it's correctly set up for your web app (Project Settings > App Check > Apps). " +
-                    "If not intentionally using App Check, this might be an internal SDK issue or conflict."
+                    "Firebase Auth Error related to reCAPTCHA ('_getRecaptchaConfig is not a function'). This is likely an App Check configuration issue. " +
+                    "Please check Firebase Console > Project Settings > App Check settings for your web app, including reCAPTCHA keys and site registration."
                  );
              } else if ((e as Error).message?.includes('auth/unauthorized-domain')) {
                  console.error(
