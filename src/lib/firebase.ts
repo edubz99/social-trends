@@ -1,4 +1,5 @@
 
+
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import { getAuth, Auth } from 'firebase/auth';
 // Corrected Firestore import for persistence
@@ -49,7 +50,7 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
           // Allow measurementId to be optional
           key !== 'measurementId' &&
           // Check for undefined/null/empty string or common placeholder patterns
-           (!value || value.startsWith('YOUR_') || value.startsWith('PLACEHOLDER_'))
+           (!value || value.startsWith('YOUR_') || value.startsWith('PLACEHOLDER_') || value.startsWith('AIza') === false) // Added check for typical API key start
       )
       .map(([key]) => `NEXT_PUBLIC_FIREBASE_${key.replace(/([A-Z])/g, '_$1').toUpperCase()}`); // Format key name like NEXT_PUBLIC_FIREBASE_API_KEY
 
@@ -78,15 +79,14 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
              // Initialize services after ensuring app exists
             auth = getAuth(app);
 
-            // *** VERY IMPORTANT: App Check / reCAPTCHA Error Debugging ***
              console.warn( // Changed to warn as it might not be the current issue
                  "*********************************************************************************\n" +
                  "*** Firebase Auth/App Check Note: Potential cause of RECAPTCHA related errors! ***\n" +
                  "If seeing 'authInstance._getRecaptchaConfig is not a function' or similar reCAPTCHA errors:\n" +
                  "1. Check Firebase Console -> Project Settings -> App Check -> Apps tab.\n" +
-                 "2. Verify 'reCAPTCHA v3' provider is configured with CORRECT Site Key/Secret.\n" +
+                 "2. Verify 'reCAPTCHA Enterprise' or 'reCAPTCHA v3' provider is configured with CORRECT Site Key/Secret.\n" +
                  "3. Ensure domain(s) (localhost, deployed) are registered in Google Cloud reCAPTCHA settings AND App Check.\n" +
-                 "4. Check if App Check is ENFORCED. If not needed, turn enforcement OFF.\n" +
+                 "4. Check if App Check is ENFORCED. If not needed, turn enforcement OFF for testing.\n" +
                  "*** Incorrect App Check setup is a common cause of these specific errors. ***\n" +
                  "*********************************************************************************"
               );
@@ -124,6 +124,12 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
                  "Firebase Auth: If you encounter 'auth/unauthorized-domain' errors, ensure the current domain (e.g., localhost:xxxx, your deployed domain) is listed in the 'Authorized domains' " +
                  "section under Firebase Console > Authentication > Settings."
              );
+
+             // Add warning for Firestore Permission errors (often 400 Bad Request on Listen)
+            console.warn(
+                 "Firestore: If you see 400 Bad Request errors on network requests to 'firestore.googleapis.com/.../Listen/channel' or 'PERMISSION_DENIED' errors in the console, " +
+                 "check your Firestore Security Rules in the Firebase Console. Ensure the rules allow the logged-in user to read the necessary documents (e.g., '/users/{userId}')."
+            );
 
 
         } catch (e: any) { // Catch specific error types if needed

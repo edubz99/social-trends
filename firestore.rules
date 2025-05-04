@@ -1,0 +1,25 @@
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Users can only read and write their own user document.
+    match /users/{userId} {
+      allow read, update, delete: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null; // Allow creating a user doc upon signup
+    }
+
+    // Add rules for other collections as needed.
+    // Example: Allow anyone to read trends (adjust as needed)
+    // match /trends/{trendId} {
+    //   allow read: if true;
+    //   allow write: if false; // Or restrict based on admin roles
+    // }
+
+    // Example: Allow logged-in users to manage their alerts (if using a separate collection)
+    // match /user_alerts/{userId}/{alertId} {
+    //  allow read, write, delete: if request.auth != null && request.auth.uid == userId;
+    // }
+  }
+}
