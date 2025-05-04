@@ -28,15 +28,18 @@ let storage: FirebaseStorage;
 let firebaseInitialized = false;
 
 // This console log helps verify environment variables are loaded on the client
-console.log("Firebase Config Used:", {
-    apiKey: firebaseConfig.apiKey ? '********' : 'MISSING', // Don't log the actual key
-    authDomain: firebaseConfig.authDomain,
-    projectId: firebaseConfig.projectId,
-    storageBucket: firebaseConfig.storageBucket,
-    messagingSenderId: firebaseConfig.messagingSenderId,
-    appId: firebaseConfig.appId,
-    measurementId: firebaseConfig.measurementId,
-});
+// Only log on client-side where process.env is populated by Next.js
+if (typeof window !== 'undefined') {
+    console.log("Firebase Config Used:", {
+        apiKey: firebaseConfig.apiKey ? '********' : 'MISSING', // Don't log the actual key
+        authDomain: firebaseConfig.authDomain || 'MISSING',
+        projectId: firebaseConfig.projectId || 'MISSING',
+        storageBucket: firebaseConfig.storageBucket || 'MISSING/DERIVED',
+        messagingSenderId: firebaseConfig.messagingSenderId || 'MISSING',
+        appId: firebaseConfig.appId || 'MISSING',
+        measurementId: firebaseConfig.measurementId || 'MISSING/OPTIONAL',
+    });
+}
 
 
 if (typeof window !== 'undefined') { // Ensure this runs only on the client
@@ -46,7 +49,7 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
           // Allow measurementId to be optional
           key !== 'measurementId' &&
           // Check for undefined/null/empty string or common placeholder patterns
-           (!value || value.startsWith('YOUR_') || value.startsWith('PLACEHOLDER_')) // Removed the check for 'AIzaSy...'
+           (!value || value.startsWith('YOUR_') || value.startsWith('PLACEHOLDER_'))
       )
       .map(([key]) => `NEXT_PUBLIC_FIREBASE_${key.replace(/([A-Z])/g, '_$1').toUpperCase()}`); // Format key name like NEXT_PUBLIC_FIREBASE_API_KEY
 
@@ -76,27 +79,33 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
             auth = getAuth(app);
 
             // *** VERY IMPORTANT: App Check / reCAPTCHA Error Debugging ***
-            // The error "authInstance._getRecaptchaConfig is not a function" STRONGLY indicates an issue with FIREBASE APP CHECK configuration.
-            console.error(
-                "*********************************************************************************\n" +
-                "*** Firebase Auth/App Check Warning: Potential cause of login errors! ***\n" +
-                "If you are seeing 'authInstance._getRecaptchaConfig is not a function' or similar reCAPTCHA errors:\n" +
-                "1. Go to Firebase Console -> Project Settings -> App Check -> Apps tab.\n" +
-                "2. Select your web app.\n" +
-                "3. Verify 'reCAPTCHA v3' provider is configured with CORRECT Site Key and Secret Key from Google Cloud.\n" +
-                "4. Ensure your domain(s) (e.g., localhost:xxxx, your deployed domain) are correctly registered in Google Cloud reCAPTCHA settings AND reflected in App Check.\n" +
-                "5. Check if App Check is ENFORCED. If you don't need it, turn enforcement OFF. If you DO need it, ensure steps 3 & 4 are perfect.\n" +
-                "*** Incorrect App Check setup is the most likely cause of this specific error. ***\n" +
-                "*********************************************************************************"
-             );
+             console.warn( // Changed to warn as it might not be the current issue
+                 "*********************************************************************************\n" +
+                 "*** Firebase Auth/App Check Note: Potential cause of RECAPTCHA related errors! ***\n" +
+                 "If seeing 'authInstance._getRecaptchaConfig is not a function' or similar reCAPTCHA errors:\n" +
+                 "1. Check Firebase Console -> Project Settings -> App Check -> Apps tab.\n" +
+                 "2. Verify 'reCAPTCHA v3' provider is configured with CORRECT Site Key/Secret.\n" +
+                 "3. Ensure domain(s) (localhost, deployed) are registered in Google Cloud reCAPTCHA settings AND App Check.\n" +
+                 "4. Check if App Check is ENFORCED. If not needed, turn enforcement OFF.\n" +
+                 "*** Incorrect App Check setup is a common cause of these specific errors. ***\n" +
+                 "*********************************************************************************"
+              );
 
              // Initialize Firestore with persistence enabled using persistentLocalCache
-            db = initializeFirestore(app, {
-                ignoreUndefinedProperties: true, // Optional: Recommended for consistency
-                localCache: persistentLocalCache({cacheSizeBytes: CACHE_SIZE_UNLIMITED}) // Enable offline persistence
-                // Use persistentMultipleTabCache if needed: persistentMultipleTabCache(/* optional config */)
-            });
-            console.log("Firestore initialized with offline persistence enabled (using persistentLocalCache).");
+             try {
+                db = initializeFirestore(app, {
+                    ignoreUndefinedProperties: true, // Optional: Recommended for consistency
+                    localCache: persistentLocalCache({ cacheSizeBytes: CACHE_SIZE_UNLIMITED }) // Enable offline persistence
+                    // Use persistentMultipleTabCache if needed: persistentMultipleTabCache(/* optional config */)
+                });
+                console.log("Firestore initialized with offline persistence enabled (using persistentLocalCache).");
+             } catch (firestoreError: any) {
+                 console.error("Firestore initialization failed:", firestoreError);
+                 // Attempt to initialize without persistence as a fallback? Or just report error.
+                 // For now, just log and db will remain undefined or partially initialized.
+                  db = getFirestore(app); // Fallback to default initialization without explicit persistence? Risky.
+                  console.warn("Falling back to default Firestore initialization due to persistence error.");
+             }
 
 
             storage = getStorage(app);
@@ -107,33 +116,32 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
             console.warn(
               "Firebase Initialized: If you encounter 'auth/configuration-not-found' errors, " +
               "ensure you have enabled the necessary sign-in methods (e.g., Email/Password, Google) " +
-              "in your Firebase project console (Authentication > Sign-in method). Also ensure your domain is authorized (Authentication > Settings > Authorized domains)."
+              "in your Firebase project console (Authentication > Sign-in method)."
             );
 
              // Add warning for unauthorized domains
             console.warn(
-                 "Firebase Auth: If you encounter 'auth/unauthorized-domain' errors, ensure the current domain (e.g., localhost, your deployed domain) is listed in the 'Authorized domains' " +
+                 "Firebase Auth: If you encounter 'auth/unauthorized-domain' errors, ensure the current domain (e.g., localhost:xxxx, your deployed domain) is listed in the 'Authorized domains' " +
                  "section under Firebase Console > Authentication > Settings."
              );
 
 
-        } catch (e) {
+        } catch (e: any) { // Catch specific error types if needed
              console.error("Firebase initialization or service attachment error:", e);
              // Provide more context if possible
-             if ((e as Error).message?.includes('invalid-api-key') || (e as Error).message?.includes('api-key-not-valid')) {
+             if (e.code === 'auth/invalid-api-key' || e.message?.includes('api-key-not-valid')) {
                 console.error("The provided NEXT_PUBLIC_FIREBASE_API_KEY seems invalid. Please double-check it in your .env file and Firebase project settings.");
-             } else if ((e as Error).message?.includes('auth/configuration-not-found')) {
+             } else if (e.code === 'auth/configuration-not-found') {
                  console.error(
                     "Firebase Auth Error: 'auth/configuration-not-found'. This usually means the Email/Password (or other) " +
                     "sign-in provider is not enabled in your Firebase project console. Go to Authentication > Sign-in method and enable it."
                  );
-             } else if ((e as Error).message?.includes('_getRecaptchaConfig is not a function')) {
-                // This specific check is redundant given the warning above, but kept for explicitness if error is thrown here.
+             } else if (e.message?.includes('_getRecaptchaConfig is not a function')) {
                 console.error(
                     "Firebase Auth Error related to reCAPTCHA ('_getRecaptchaConfig is not a function'). This is LIKELY an App Check configuration issue. " +
                     "Please check Firebase Console > Project Settings > App Check settings for your web app, including reCAPTCHA keys and site registration. See the detailed warning above."
                  );
-             } else if ((e as Error).message?.includes('auth/unauthorized-domain')) {
+             } else if (e.code === 'auth/unauthorized-domain') {
                  console.error(
                      "Firebase Auth Error: 'auth/unauthorized-domain'. The current domain is not authorized for OAuth operations. " +
                      "Go to the Firebase Console > Authentication > Settings > Authorized domains and add your application's domain(s) (e.g., localhost, your-deployed-domain.com)."
@@ -141,6 +149,7 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
              }
              app = {} as FirebaseApp; // Assign dummy on error
              auth = {} as Auth;
+             db = db || {} as Firestore; // Keep potentially partially initialized db? Or reset? Resetting is safer.
              db = {} as Firestore;
              storage = {} as FirebaseStorage;
              firebaseInitialized = false;
