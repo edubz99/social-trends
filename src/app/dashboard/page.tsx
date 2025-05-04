@@ -161,7 +161,7 @@ export default function DashboardPage() {
               <Alert className="mt-4 bg-accent/10 border-accent/30 text-accent-foreground">
                  <Rocket className="h-4 w-4 !text-accent" />
                  <AlertTitle className="text-accent">Go Premium!</AlertTitle>
-                 <AlertDescription>
+                 <AlertDescription className="text-muted-foreground">
                    Unlock multiple niches, real-time alerts, saved trends, and Slack integration.
                    <Link href="/dashboard/billing" className="ml-2 font-semibold underline">Upgrade Now</Link>
                  </AlertDescription>
