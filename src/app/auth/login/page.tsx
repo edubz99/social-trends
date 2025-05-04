@@ -24,11 +24,20 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true);
     try {
+      console.log("Attempting email/password sign in. Auth instance:", auth); // Log auth instance before call
       await signInWithEmailAndPassword(auth, email, password);
       toast({ title: "Login Successful", description: "Redirecting to dashboard..." });
       router.push('/dashboard');
     } catch (error: any) {
       console.error("Login error:", error);
+      // Specifically log if it's the reCAPTCHA error
+      if (error.message?.includes('_getRecaptchaConfig is not a function')) {
+          console.error(
+              "Login Failed: Encountered 'authInstance._getRecaptchaConfig is not a function'. " +
+              "This strongly indicates an issue with Firebase App Check / reCAPTCHA configuration in the Firebase/Google Cloud Console. " +
+              "Please review the detailed warnings in the browser console during Firebase initialization (check src/lib/firebase.ts logs)."
+          );
+      }
       toast({
         title: "Login Failed",
         description: error.message || "An unexpected error occurred.",
@@ -43,11 +52,20 @@ export default function LoginPage() {
     setLoading(true);
     const provider = new GoogleAuthProvider();
     try {
+       console.log("Attempting Google sign in. Auth instance:", auth); // Log auth instance before call
       await signInWithPopup(auth, provider);
       toast({ title: "Google Login Successful", description: "Redirecting to dashboard..." });
       router.push('/dashboard'); // Redirect to dashboard or onboarding if needed
     } catch (error: any) {
       console.error("Google login error:", error);
+       // Specifically log if it's the reCAPTCHA error
+      if (error.message?.includes('_getRecaptchaConfig is not a function')) {
+          console.error(
+              "Google Login Failed: Encountered 'authInstance._getRecaptchaConfig is not a function'. " +
+              "This strongly indicates an issue with Firebase App Check / reCAPTCHA configuration in the Firebase/Google Cloud Console. " +
+              "Please review the detailed warnings in the browser console during Firebase initialization (check src/lib/firebase.ts logs)."
+          );
+      }
       toast({
         title: "Google Login Failed",
         description: error.message || "An unexpected error occurred.",

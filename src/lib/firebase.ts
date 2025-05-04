@@ -1,5 +1,4 @@
 
-
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import { getAuth, Auth } from 'firebase/auth';
 // Corrected Firestore import for persistence
@@ -32,12 +31,12 @@ let firebaseInitialized = false;
 // Only log on client-side where process.env is populated by Next.js
 if (typeof window !== 'undefined') {
     console.log("Firebase Config Used:", {
-        apiKey: firebaseConfig.apiKey ? '********' : 'MISSING', // Don't log the actual key
-        authDomain: firebaseConfig.authDomain || 'MISSING',
-        projectId: firebaseConfig.projectId || 'MISSING',
-        storageBucket: firebaseConfig.storageBucket || 'MISSING/DERIVED',
-        messagingSenderId: firebaseConfig.messagingSenderId || 'MISSING',
-        appId: firebaseConfig.appId || 'MISSING',
+        apiKey: firebaseConfig.apiKey ? '********' : 'MISSING/INVALID', // Don't log the actual key, check validity broadly
+        authDomain: firebaseConfig.authDomain || 'MISSING/INVALID',
+        projectId: firebaseConfig.projectId || 'MISSING/INVALID',
+        storageBucket: firebaseConfig.storageBucket || 'MISSING/DERIVED/INVALID',
+        messagingSenderId: firebaseConfig.messagingSenderId || 'MISSING/INVALID',
+        appId: firebaseConfig.appId || 'MISSING/INVALID',
         measurementId: firebaseConfig.measurementId || 'MISSING/OPTIONAL',
     });
 }
@@ -50,7 +49,7 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
           // Allow measurementId to be optional
           key !== 'measurementId' &&
           // Check for undefined/null/empty string or common placeholder patterns
-           (!value || value.startsWith('YOUR_') || value.startsWith('PLACEHOLDER_') || value.startsWith('AIza') === false) // Added check for typical API key start
+           (!value || value.startsWith('YOUR_') || value.startsWith('PLACEHOLDER_') || (key === 'apiKey' && !value.startsWith('AIza'))) // Basic check for API key format
       )
       .map(([key]) => `NEXT_PUBLIC_FIREBASE_${key.replace(/([A-Z])/g, '_$1').toUpperCase()}`); // Format key name like NEXT_PUBLIC_FIREBASE_API_KEY
 
@@ -76,34 +75,40 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
                 app = getApp();
                  console.log("Using existing Firebase app instance.");
             }
-             // Initialize services after ensuring app exists
-            auth = getAuth(app);
 
-             console.warn( // Changed to warn as it might not be the current issue
+            // *** VERY IMPORTANT FOR 'authInstance._getRecaptchaConfig is not a function' ERROR ***
+            console.error(
                  "*********************************************************************************\n" +
-                 "*** Firebase Auth/App Check Note: Potential cause of RECAPTCHA related errors! ***\n" +
-                 "If seeing 'authInstance._getRecaptchaConfig is not a function' or similar reCAPTCHA errors:\n" +
-                 "1. Check Firebase Console -> Project Settings -> App Check -> Apps tab.\n" +
-                 "2. Verify 'reCAPTCHA Enterprise' or 'reCAPTCHA v3' provider is configured with CORRECT Site Key/Secret.\n" +
-                 "3. Ensure domain(s) (localhost, deployed) are registered in Google Cloud reCAPTCHA settings AND App Check.\n" +
-                 "4. Check if App Check is ENFORCED. If not needed, turn enforcement OFF for testing.\n" +
-                 "*** Incorrect App Check setup is a common cause of these specific errors. ***\n" +
+                 "*** Firebase App Check / reCAPTCHA Configuration Issue Likely! ***\n" +
+                 "The error 'authInstance._getRecaptchaConfig is not a function' almost always means App Check is misconfigured.\n" +
+                 "PLEASE VERIFY THE FOLLOWING IN YOUR FIREBASE CONSOLE:\n" +
+                 "1. Go to 'Project Settings' > 'App Check'.\n" +
+                 "2. Select your Web App.\n" +
+                 "3. Providers Tab: Ensure 'reCAPTCHA Enterprise' or 'reCAPTCHA v3' is REGISTERED and CONFIGURED.\n" +
+                 "   - Click 'Manage providers'.\n" +
+                 "   - Make sure the correct Site Key (and Secret Key for Enterprise) from Google Cloud Console > reCAPTCHA Admin is entered.\n" +
+                 "4. Google Cloud Console (reCAPTCHA Admin): Ensure your domains (e.g., localhost:xxxx, your-deployed-domain.com) are added to the ALLOWED DOMAINS for the reCAPTCHA key you are using.\n" +
+                 "5. Back in Firebase App Check: Check if 'Enforce' is ON. If you are debugging, temporarily turn enforcement OFF to see if the error disappears. If it does, it confirms the issue is App Check setup.\n" +
+                 "6. Also check 'Authentication' > 'Settings' > 'Authorized domains'. Ensure your domain(s) are listed there too.\n" +
+                 "*** Fixing the App Check/reCAPTCHA setup in the Firebase & Google Cloud consoles is crucial. ***\n" +
                  "*********************************************************************************"
               );
+
+             // Initialize services after ensuring app exists
+             console.log("Attempting to get Auth instance for app:", app); // Log before getAuth
+             auth = getAuth(app);
+
 
              // Initialize Firestore with persistence enabled using persistentLocalCache
              try {
                 db = initializeFirestore(app, {
                     ignoreUndefinedProperties: true, // Optional: Recommended for consistency
                     localCache: persistentLocalCache({ cacheSizeBytes: CACHE_SIZE_UNLIMITED }) // Enable offline persistence
-                    // Use persistentMultipleTabCache if needed: persistentMultipleTabCache(/* optional config */)
                 });
                 console.log("Firestore initialized with offline persistence enabled (using persistentLocalCache).");
              } catch (firestoreError: any) {
                  console.error("Firestore initialization failed:", firestoreError);
-                 // Attempt to initialize without persistence as a fallback? Or just report error.
-                 // For now, just log and db will remain undefined or partially initialized.
-                  db = getFirestore(app); // Fallback to default initialization without explicit persistence? Risky.
+                  db = getFirestore(app); // Fallback
                   console.warn("Falling back to default Firestore initialization due to persistence error.");
              }
 
@@ -143,9 +148,9 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
                     "sign-in provider is not enabled in your Firebase project console. Go to Authentication > Sign-in method and enable it."
                  );
              } else if (e.message?.includes('_getRecaptchaConfig is not a function')) {
-                console.error(
-                    "Firebase Auth Error related to reCAPTCHA ('_getRecaptchaConfig is not a function'). This is LIKELY an App Check configuration issue. " +
-                    "Please check Firebase Console > Project Settings > App Check settings for your web app, including reCAPTCHA keys and site registration. See the detailed warning above."
+                console.error( // Reinforce the specific error message
+                    "Firebase Auth Error: 'authInstance._getRecaptchaConfig is not a function'. THIS IS VERY LIKELY AN APP CHECK / RECAPTCHA CONFIGURATION ISSUE IN FIREBASE/GOOGLE CLOUD CONSOLE. " +
+                    "Please carefully review the detailed warning message logged above regarding App Check setup."
                  );
              } else if (e.code === 'auth/unauthorized-domain') {
                  console.error(
