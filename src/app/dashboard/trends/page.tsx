@@ -14,14 +14,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Star, Filter, Calendar, WifiOff } from 'lucide-react';
+import { Star, Filter, Calendar, WifiOff, HelpCircle } from 'lucide-react'; // Added HelpCircle
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { formatDistanceToNow } from 'date-fns'; // For showing relative time
 import { Label } from '@/components/ui/label';
-// Remove mock service imports
-// import { getTikTokTrends, type TikTokTrend } from '@/services/tiktok';
-// import { getInstagramReelTrends, type InstagramReelTrend } from '@/services/instagram';
-// import { getYoutubeTrends, type YoutubeTrend } from '@/services/youtube';
 
 // Unified trend data structure (Matches Firestore structure)
 interface Trend {
@@ -42,22 +38,30 @@ interface Trend {
 
 // Fetch user data including saved trends and niches
 async function fetchUserDataWithDetails(uid: string) {
+    console.log(`Fetching user data for UID: ${uid}`);
     const userDocRef = doc(db, "users", uid);
-    const userDocSnap = await getDoc(userDocRef);
-    if (userDocSnap.exists()) {
-        const data = userDocSnap.data();
-        return {
-            uid: data.uid,
-            email: data.email,
-            displayName: data.displayName,
-            primaryNiche: data.primaryNiche,
-            selectedNiches: data.selectedNiches || [],
-            savedTrendIds: data.savedTrendIds || [],
-            subscription: data.subscription || { plan: 'free', status: 'active' },
-        };
-    } else {
-        console.log("No such user document!");
-        return null;
+    try {
+        const userDocSnap = await getDoc(userDocRef);
+        if (userDocSnap.exists()) {
+            const data = userDocSnap.data();
+            console.log(`User data found for ${uid}:`, data);
+            return {
+                uid: data.uid,
+                email: data.email,
+                displayName: data.displayName,
+                primaryNiche: data.primaryNiche,
+                selectedNiches: data.selectedNiches || [],
+                savedTrendIds: data.savedTrendIds || [],
+                subscription: data.subscription || { plan: 'free', status: 'active' },
+            };
+        } else {
+            console.warn(`No user document found for UID: ${uid}`);
+            return null;
+        }
+    } catch (error) {
+         console.error(`Error fetching user data for ${uid}:`, error);
+         // Rethrow specific errors if needed, otherwise handle in calling function
+         throw error;
     }
 }
 
@@ -82,30 +86,52 @@ async function fetchTrendsWithFilters(
     }
 
     // Filter by Date Range (using processedAt)
+    let dateFilterApplied = false;
     if (filters.dateRange) {
         const now = new Date();
         let cutoffDate: Date | null = null;
         if (filters.dateRange === 'today') {
             cutoffDate = new Date(now.setHours(0, 0, 0, 0));
         } else if (filters.dateRange === 'last_3_days') {
-            cutoffDate = new Date(now.setDate(now.getDate() - 3));
+            cutoffDate = new Date(new Date().setDate(now.getDate() - 3)); // Use new Date() to avoid mutating 'now'
             cutoffDate.setHours(0, 0, 0, 0);
         } else if (filters.dateRange === 'last_7_days') {
-             cutoffDate = new Date(now.setDate(now.getDate() - 7));
+             cutoffDate = new Date(new Date().setDate(now.getDate() - 7));
              cutoffDate.setHours(0, 0, 0, 0);
         }
         // Add other ranges like 'last_30_days' if needed
 
         if (cutoffDate) {
+            console.log(`Applying date filter: processedAt >= ${cutoffDate.toISOString()}`);
             queryConstraints.push(where('processedAt', '>=', Timestamp.fromDate(cutoffDate)));
+            dateFilterApplied = true;
+        } else {
+             console.log("No valid cutoff date derived from dateRange:", filters.dateRange);
         }
     }
 
     // Order by processing time (most recent first)
-    queryConstraints.push(orderBy('processedAt', 'desc'));
+    // If filtering by date, Firestore might require the first orderBy to match the range filter field
+    if (dateFilterApplied) {
+        queryConstraints.push(orderBy('processedAt', 'desc'));
+    } else if (filters.category && filters.category.toLowerCase() !== 'all') {
+        // If filtering by category but not date, we might need an index on category+processedAt
+        queryConstraints.push(orderBy('processedAt', 'desc'));
+    } else if (filters.platform && filters.platform.toLowerCase() !== 'all') {
+         // If filtering by platform but not date, we might need an index on platform+processedAt
+        queryConstraints.push(orderBy('processedAt', 'desc'));
+    }
+    else {
+        // Default ordering if no other specific filters require it first
+        queryConstraints.push(orderBy('processedAt', 'desc'));
+    }
+
 
     // Limit the results
     queryConstraints.push(limit(count));
+
+    // Log the final query constraints (excluding the collection itself)
+    console.log("Firestore query constraints:", queryConstraints.map(c => c.type + ': ' + JSON.stringify(c._queryOptions || c)));
 
     const trendsQuery = query(trendsCollection, ...queryConstraints);
 
@@ -114,32 +140,44 @@ async function fetchTrendsWithFilters(
         const trends: Trend[] = [];
         querySnapshot.forEach((docSnap) => {
             const data = docSnap.data();
+            // Basic validation: ensure essential fields exist
+            if (!data.title || !data.url || !data.platform || !data.discoveredAt) {
+                 console.warn(`Skipping trend with missing essential data (ID: ${docSnap.id}):`, data);
+                 return;
+            }
             trends.push({
                 id: docSnap.id,
                 title: data.title,
                 platform: data.platform,
                 views: data.views,
                 likes: data.likes,
-                category: data.category,
+                category: data.category || 'Uncategorized', // Default if missing
                 url: data.url,
                 description: data.description,
-                discoveredAt: (data.discoveredAt as Timestamp)?.toDate() || new Date(0),
-                processedAt: (data.processedAt as Timestamp)?.toDate(),
+                discoveredAt: (data.discoveredAt as Timestamp)?.toDate() || new Date(0), // Handle potential null/undefined
+                processedAt: (data.processedAt as Timestamp)?.toDate(), // Handle potential null/undefined
                 categoryConfidence: data.categoryConfidence,
                 // saved status added later
             });
         });
         console.log(`Fetched ${trends.length} trends from Firestore based on filters.`);
+        if (trends.length === 0) {
+            console.log("No trends found matching the current filters.");
+        }
         return trends;
     } catch (error) {
         console.error(`Error fetching trends with filters from Firestore:`, error);
          if (error instanceof FirestoreError && error.code === 'failed-precondition') {
              console.error(
-                "Firestore query failed: Missing index. Check Firestore console 'Indexes' tab. " +
-                `You likely need a composite index involving fields like 'category', 'platform', and 'processedAt'. ` +
-                "The error message might provide a direct link to create it."
+                "Firestore query failed: This usually indicates a missing Firestore index. " +
+                `Please check the Firestore console (Database > Indexes) for an automatic index creation link, or manually create a composite index matching the query filters: ` +
+                `Collection: 'trends', Fields: ${JSON.stringify(filters)}, Order: processedAt DESC. ` +
+                "The exact index depends on the filters applied. See Firebase documentation for index requirements."
              );
-             throw new Error("Database query error: Index required. Please check logs or contact support.");
+             throw new Error("Database query error: A required index is missing. Please check Firestore indexes or contact support.");
+        } else if (error instanceof FirestoreError && (error.code === 'unavailable' || error.message.includes('offline'))) {
+             console.warn("Firestore query failed: Client appears to be offline.");
+             throw new Error("Could not load trends. You appear to be offline.");
         }
         throw error; // Re-throw other errors
     }
@@ -164,6 +202,7 @@ export default function TrendsPage() {
   const [loadingTrends, setLoadingTrends] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isOfflineError, setIsOfflineError] = useState(false);
+  const [isIndexError, setIsIndexError] = useState(false); // State for index-specific error
 
   // Filters State
   const [selectedNiche, setSelectedNiche] = useState<string>('all');
@@ -179,8 +218,8 @@ export default function TrendsPage() {
         fetchUserDataWithDetails(user.uid)
             .then(data => {
                 setUserData(data);
-                // Set initial niche filter to user's primary niche or 'all'
-                setSelectedNiche(data?.primaryNiche || 'all');
+                // Set initial niche filter to user's primary niche or 'all' if available
+                setSelectedNiche(data?.primaryNiche && data?.selectedNiches?.includes(data.primaryNiche) ? data.primaryNiche : 'all');
             })
             .catch(err => {
                 console.error("Error fetching user data:", err);
@@ -188,7 +227,7 @@ export default function TrendsPage() {
                     setError("Could not load user information. You appear to be offline.");
                     setIsOfflineError(true);
                 } else {
-                    setError("Could not load user information.");
+                    setError("Could not load user information. Please try logging in again.");
                 }
             })
             .finally(() => setLoadingUser(false));
@@ -203,13 +242,27 @@ export default function TrendsPage() {
     // Don't fetch if user isn't loaded or essential data is missing
     if (!user || loadingUser || !userData) {
         // If user loading finished but userData is null, it indicates an error handled elsewhere
-        if (!loadingUser && !userData) setLoadingTrends(false);
+        if (!loadingUser && !userData && !error) { // Only set loading false if no user error occurred
+            console.log("User data not ready, skipping trend fetch.");
+            setLoadingTrends(false);
+        }
         return;
     }
+
+    // Ensure user has selected niches if not filtering by 'all'
+    if (selectedNiche !== 'all' && (!userData.selectedNiches || userData.selectedNiches.length === 0)) {
+         console.log("No niches selected by user, defaulting to 'all' filter.");
+         setSelectedNiche('all'); // Reset filter if needed
+         // Optionally show a message to the user to select niches in settings
+         return;
+    }
+
 
     const loadTrends = async () => {
         setLoadingTrends(true);
         setError(null); // Clear previous trend errors
+        setIsOfflineError(false);
+        setIsIndexError(false);
 
         try {
             const currentFilters = {
@@ -229,11 +282,13 @@ export default function TrendsPage() {
             setDisplayedTrends(trendsWithSaveStatus);
         } catch (err: any) {
              console.error("Error fetching filtered trends:", err);
-              if (err instanceof FirestoreError && (err.code === 'unavailable' || err.message.includes('offline'))) {
-                setError("Could not load trends. You appear to be offline.");
-                setIsOfflineError(true); // Set offline flag specifically for trend loading failure
-             } else {
-                setError(err.message || "Could not load trends. Please try again later.");
+             const errorMessage = err.message || "Could not load trends. Please try again later.";
+             setError(errorMessage);
+
+             if (errorMessage.includes("offline")) {
+                 setIsOfflineError(true);
+             } else if (errorMessage.includes("index required") || errorMessage.includes("index is missing")) {
+                 setIsIndexError(true);
              }
              setDisplayedTrends([]); // Clear trends on error
         } finally {
@@ -274,7 +329,7 @@ export default function TrendsPage() {
         });
         console.log(`Trend ${trendId} ${newSavedState ? 'saved' : 'unsaved'} successfully.`);
      } catch (error) {
-        console.error("Failed to update saved trend:", error);
+        console.error("Failed to update saved trend in Firestore:", error);
          // Revert optimistic updates
         setDisplayedTrends(prevTrends =>
             prevTrends.map(t => t.id === trendId ? { ...t, saved: currentlySaved } : t)
@@ -282,10 +337,10 @@ export default function TrendsPage() {
          setUserData(prevUserData => ({
             ...prevUserData!,
             savedTrendIds: currentlySaved
-                ? [...(prevUserData?.savedTrendIds || []), trendId]
-                : (prevUserData?.savedTrendIds || []).filter(id => id !== trendId),
+                ? [...(prevUserData?.savedTrendIds || []), trendId] // Add back if it was originally saved
+                : (prevUserData?.savedTrendIds || []).filter(id => id !== trendId), // Remove if it was originally unsaved
          }));
-        alert(`Failed to ${newSavedState ? 'unsave' : 'save'} trend. Please try again.`);
+        alert(`Failed to ${newSavedState ? 'save' : 'unsave'} trend. Please try again.`);
      }
   };
 
@@ -307,7 +362,7 @@ export default function TrendsPage() {
                 <Label htmlFor="niche-filter">Niche</Label>
                 <Select
                     value={selectedNiche}
-                    onValueChange={setSelectedNiche}
+                    onValueChange={(value) => { console.log("Niche filter changed:", value); setSelectedNiche(value); }}
                     disabled={isLoading || isOfflineError || nicheOptions.length <= 1} // Disable if loading, offline, or only 'all' available
                 >
                     <SelectTrigger id="niche-filter">
@@ -321,12 +376,17 @@ export default function TrendsPage() {
                         ))}
                     </SelectContent>
                 </Select>
-                {!isPaidUser && <p className="text-xs text-muted-foreground pt-1">Upgrade to track more niches.</p>}
+                {!isPaidUser && nicheOptions.length > 2 && <p className="text-xs text-muted-foreground pt-1">Upgrade to track more niches.</p>}
+                 {userData && userData.selectedNiches?.length === 0 && <p className="text-xs text-amber-600 dark:text-amber-400 pt-1">Go to settings to select niches!</p>}
              </div>
              {/* Platform Filter */}
              <div className="flex-1 space-y-2">
                 <Label htmlFor="platform-filter">Platform</Label>
-                <Select value={selectedPlatform} onValueChange={setSelectedPlatform} disabled={isLoading || isOfflineError}>
+                <Select
+                    value={selectedPlatform}
+                    onValueChange={(value) => { console.log("Platform filter changed:", value); setSelectedPlatform(value); }}
+                    disabled={isLoading || isOfflineError}
+                >
                     <SelectTrigger id="platform-filter">
                         <SelectValue placeholder="Filter by platform" />
                     </SelectTrigger>
@@ -342,7 +402,11 @@ export default function TrendsPage() {
              {/* Date Range Filter */}
              <div className="flex-1 space-y-2">
                 <Label htmlFor="date-filter">Date Range</Label>
-                 <Select value={selectedDateRange} onValueChange={setSelectedDateRange} disabled={isLoading || isOfflineError}>
+                 <Select
+                    value={selectedDateRange}
+                    onValueChange={(value) => { console.log("Date range filter changed:", value); setSelectedDateRange(value); }}
+                    disabled={isLoading || isOfflineError}
+                 >
                     <SelectTrigger id="date-filter">
                         <SelectValue placeholder="Filter by date" />
                     </SelectTrigger>
@@ -360,9 +424,14 @@ export default function TrendsPage() {
           {/* Trends List or Loading/Error State */}
           {error && ( // Display errors prominently
               <Alert variant="destructive">
-                 {isOfflineError && <WifiOff className="h-4 w-4" />}
-                 <AlertTitle>{isOfflineError ? "Offline" : "Error"}</AlertTitle>
-                 <AlertDescription>{error}</AlertDescription>
+                 {isOfflineError ? <WifiOff className="h-4 w-4" /> : (isIndexError ? <HelpCircle className="h-4 w-4" /> : null)}
+                 <AlertTitle>{isOfflineError ? "Offline" : (isIndexError ? "Database Query Error" : "Error")}</AlertTitle>
+                 <AlertDescription>
+                    {error}
+                    {isIndexError && (
+                        <span className="block mt-1 text-xs">This often means a required Firestore index is missing for your filter combination. Check the browser console logs for a link to create it, or contact support.</span>
+                    )}
+                 </AlertDescription>
               </Alert>
           )}
 
@@ -370,13 +439,13 @@ export default function TrendsPage() {
             <div className="space-y-4 mt-4">
               {[...Array(5)].map((_, i) => (
                  <div key={i} className="flex items-center space-x-4 p-4 border rounded-lg">
-                    <Skeleton className="h-12 w-12 rounded-md" />
+                    <Skeleton className="h-12 w-12 rounded-md shrink-0" />
                     <div className="space-y-2 flex-grow">
                         <Skeleton className="h-4 w-4/5" />
                         <Skeleton className="h-3 w-3/5" />
                         <Skeleton className="h-3 w-1/3" />
                     </div>
-                    <Skeleton className="h-8 w-8 rounded-full" />
+                    <Skeleton className="h-8 w-8 rounded-full shrink-0" />
                  </div>
               ))}
             </div>
@@ -384,7 +453,7 @@ export default function TrendsPage() {
             <ul className="space-y-4 mt-4">
               {displayedTrends.map((trend) => (
                 <li key={trend.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors">
-                   <div className="flex items-start gap-4 mb-2 sm:mb-0 flex-grow">
+                   <div className="flex items-start gap-4 mb-2 sm:mb-0 flex-grow min-w-0"> {/* Added min-w-0 */}
                        {/* Platform Icon */}
                         <div className="p-2 bg-secondary rounded-md mt-1 shrink-0">
                            {trend.platform === 'TikTok' && <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="currentColor" viewBox="0 0 16 16"><path d="M9 0h1.98c.144.715.54 1.617 1.235 2.512C12.895 3.389 13.797 4 15 4v2c-1.753 0-3.07-.814-4-1.829V11a5 5 0 1 1-5-5v2a3 3 0 1 0 3 3z"/></svg>}
@@ -392,15 +461,21 @@ export default function TrendsPage() {
                            {trend.platform === 'YouTube' && <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-red-600" fill="currentColor" viewBox="0 0 16 16"><path d="M8.051 1.999h.089c.822.003 4.987.033 6.11.335a2.01 2.01 0 0 1 1.415 1.42c.101.38.172.883.22 1.402l.01.104.022.26.008.104c.065.914.073 1.77.074 1.957v.075c-.001.194-.01 1.102-.074 2.016l-.008.105-.022.259-.01.104c-.048.519-.119 1.023-.22 1.402a2.007 2.007 0 0 1-1.415 1.42c-1.16.312-5.569.334-6.18.335h-.142c-.309 0-1.587-.006-2.927-.052l-.17-.006-.087-.004-.171-.007-.171-.007c-1.11-.049-2.167-.128-2.654-.26a2.007 2.007 0 0 1-1.415-1.419c-.111-.417-.185-.986-.235-1.558L.09 9.82l-.008-.104A31.4 31.4 0 0 1 0 7.68v-.123c.002-.215.01-.958.064-1.778l.007-.103.003-.052.008-.104.022-.26.01-.104c.048-.519.119-1.023.22-1.402a2.007 2.007 0 0 1 1.415-1.42c.487-.13 1.544-.21 2.654-.26l.17-.007.171-.006.087-.004.171-.007.17-.006c1.34-.046 2.617-.052 2.927-.052H8.05zm-1.631 5.53l3.243 1.858-3.243 1.858V7.53z"/></svg>}
                         </div>
                        {/* Trend Details */}
-                       <div className="flex-grow">
-                          <a href={trend.url} target="_blank" rel="noopener noreferrer" className="font-semibold hover:underline hover:text-accent">
+                       <div className="flex-grow min-w-0"> {/* Added min-w-0 */}
+                          <a
+                            href={trend.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="font-semibold hover:underline hover:text-accent block truncate" // Added block and truncate
+                            title={trend.title} // Add title attribute for full text on hover
+                          >
                             {trend.title}
                           </a>
                            <p className="text-sm text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 mt-1">
                                {trend.category && <span className="inline-flex items-center"><Filter className="h-3 w-3 mr-1" /> {trend.category}</span> }
-                                {trend.views != null && <span>• {(trend.views / 1000000).toFixed(1)}M views</span>}
-                                {trend.likes != null && <span>• {(trend.likes / 1000).toFixed(1)}K likes</span>}
-                                {trend.processedAt && <span className="inline-flex items-center"><Calendar className="h-3 w-3 mr-1" /> {formatDistanceToNow(trend.processedAt, { addSuffix: true })}</span>}
+                                {trend.views != null && <span className="whitespace-nowrap"> • {(trend.views / 1000000).toFixed(1)}M views</span>} {/* Added whitespace-nowrap */}
+                                {trend.likes != null && <span className="whitespace-nowrap"> • {(trend.likes / 1000).toFixed(1)}K likes</span>} {/* Added whitespace-nowrap */}
+                                {trend.processedAt && <span className="inline-flex items-center whitespace-nowrap"><Calendar className="h-3 w-3 mr-1" /> {formatDistanceToNow(trend.processedAt, { addSuffix: true })}</span>} {/* Added whitespace-nowrap */}
                             </p>
                             {trend.description && <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{trend.description}</p>}
                        </div>
