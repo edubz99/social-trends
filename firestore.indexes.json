@@ -1,5 +1,32 @@
 
 {
-  "indexes": [],
+  "indexes": [
+    {
+      "collectionGroup": "trends",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "category", "order": "ASCENDING" },
+        { "fieldPath": "processedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "trends",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "platform", "order": "ASCENDING" },
+        { "fieldPath": "processedAt", "order": "DESCENDING" }
+      ]
+    },
+     {
+      "collectionGroup": "trends",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "category", "order": "ASCENDING" },
+        { "fieldPath": "platform", "order": "ASCENDING" },
+        { "fieldPath": "processedAt", "order": "DESCENDING" }
+      ]
+    }
+    // Add more indexes as needed based on filtering combinations in TrendsPage
+  ],
   "fieldOverrides": []
 }
