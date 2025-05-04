@@ -48,9 +48,10 @@ async function fetchUserData(uid: string) {
     const userDocRef = doc(db, "users", uid);
     const userDocSnap = await getDoc(userDocRef);
     if (userDocSnap.exists()) {
+        console.log("User document found:", userDocSnap.data());
         return userDocSnap.data();
     } else {
-        console.log("No such user document!");
+        console.error(`No user document found for UID: ${uid}`);
         return null;
     }
 }
@@ -68,51 +69,67 @@ export default function DashboardPage() {
     if (user) {
       const loadUserData = async () => {
         setLoadingUser(true);
+        setError(null); // Clear previous errors
         try {
           const data = await fetchUserData(user.uid);
-          setUserData(data);
+          if (data) {
+             setUserData(data);
+          } else {
+             // User document does not exist in Firestore
+             console.error("DashboardPage: User document missing for UID:", user.uid);
+             setError("User profile not found. It might not have been created correctly during signup or login. Please try logging out and signing up again, or contact support.");
+          }
         } catch (err) {
           console.error("Error fetching user data:", err);
-          setError("Could not load user information.");
+          setError("Could not load user information due to an error. Please try again later.");
         } finally {
           setLoadingUser(false);
         }
       };
       loadUserData();
+    } else {
+        // User is not logged in (should be handled by layout, but good to check)
+        setLoadingUser(false);
+        setLoadingTrends(false);
     }
   }, [user]);
 
  useEffect(() => {
-    if (userData?.selectedNiches && userData.selectedNiches.length > 0) {
-      const loadTrends = async () => {
-        setLoadingTrends(true);
-        setError(null);
-        try {
-          // For simplicity, fetch trends for the primary niche in MVP
-          // In paid version, iterate through userData.selectedNiches
-          const primaryNiche = userData.primaryNiche || userData.selectedNiches[0];
-          const fetchedTrends = await fetchTrendsForNiche(primaryNiche);
-          // TODO: Check saved status against user's saved trends in Firestore
-          setTrends(fetchedTrends);
-        } catch (err) {
-          console.error("Error fetching trends:", err);
-          setError("Could not load trends. Please try again later.");
-        } finally {
+    // Only try to load trends if user data exists and niches are selected
+    if (userData && !loadingUser) {
+      if (userData.selectedNiches && userData.selectedNiches.length > 0) {
+          const loadTrends = async () => {
+            setLoadingTrends(true);
+            setError(null); // Clear previous errors related to loading trends
+            try {
+              // For simplicity, fetch trends for the primary niche in MVP
+              // In paid version, iterate through userData.selectedNiches
+              const primaryNiche = userData.primaryNiche || userData.selectedNiches[0];
+              const fetchedTrends = await fetchTrendsForNiche(primaryNiche);
+              // TODO: Check saved status against user's saved trends in Firestore
+              setTrends(fetchedTrends);
+            } catch (err) {
+              console.error("Error fetching trends:", err);
+              setError("Could not load trends. Please try again later.");
+            } finally {
+              setLoadingTrends(false);
+            }
+          };
+          loadTrends();
+      } else {
+          // User data exists, but no niches selected
           setLoadingTrends(false);
-        }
-      };
-      loadTrends();
-    } else if (!loadingUser && user) {
-         // Handle case where user data loaded but no niches found (maybe onboarding issue)
-         setLoadingTrends(false);
-         if (!userData) {
-             setError("User data not found. Please try logging in again or contact support.");
-         } else {
-            // User might need to select a niche
-             setError("Please select at least one niche in your settings.");
-         }
+          setError("Please select at least one niche in your settings to see relevant trends.");
+      }
+    } else if (!loadingUser && !userData && user) {
+        // User is logged in, loading finished, but userData is still null (likely due to Firestore document missing)
+        // Error state is already set in the first useEffect.
+        setLoadingTrends(false); // Don't attempt to load trends
+    } else if (!user) {
+        // User logged out or not yet loaded
+        setLoadingTrends(false);
     }
-  }, [userData, loadingUser, user]);
+ }, [userData, loadingUser, user]);
 
 
   const handleSaveTrend = (trendId: string) => {
@@ -140,19 +157,89 @@ export default function DashboardPage() {
 
   const isPaidUser = userData?.subscription?.plan === 'paid';
 
+   if (loadingUser) {
+     return (
+        <div className="space-y-6">
+            <Card>
+                <CardHeader>
+                    <Skeleton className="h-8 w-48" />
+                    <Skeleton className="h-4 w-64 mt-1" />
+                </CardHeader>
+                <CardContent>
+                    <Skeleton className="h-5 w-48 mb-4" />
+                    <Skeleton className="h-16 w-full" />
+                </CardContent>
+            </Card>
+             <Card>
+                <CardHeader className="flex flex-row items-center justify-between">
+                    <div>
+                        <Skeleton className="h-6 w-40" />
+                         <Skeleton className="h-4 w-56 mt-1" />
+                    </div>
+                    <Skeleton className="h-9 w-28" />
+                </CardHeader>
+                <CardContent>
+                    <div className="space-y-4">
+                        {[...Array(3)].map((_, i) => (
+                            <div key={i} className="flex items-center space-x-4 p-4 border rounded-lg">
+                                <Skeleton className="h-10 w-10 rounded-md" />
+                                <div className="space-y-2 flex-grow">
+                                    <Skeleton className="h-4 w-3/4" />
+                                    <Skeleton className="h-3 w-1/2" />
+                                </div>
+                                <Skeleton className="h-8 w-8 rounded-full" />
+                            </div>
+                        ))}
+                    </div>
+                </CardContent>
+            </Card>
+        </div>
+     );
+   }
+
+    // Display error if userData loading failed or document was missing
+    if (error && !loadingTrends) { // Show error predominantly if exists
+        return (
+             <div className="space-y-6">
+                 <Alert variant="destructive">
+                     <AlertTitle>Error Loading Dashboard</AlertTitle>
+                     <AlertDescription>{error}</AlertDescription>
+                     {error.includes("User profile not found") && (
+                        <div className="mt-4">
+                            <Link href="/auth/signup">
+                                <Button variant="outline" size="sm">Go to Signup</Button>
+                            </Link>
+                        </div>
+                     )}
+                 </Alert>
+            </div>
+        );
+    }
+
+     // Ensure userData is available before rendering main content
+     if (!userData) {
+        // This case should ideally be covered by loading or error states,
+        // but acts as a fallback. It might indicate an unexpected state.
+        console.warn("DashboardPage: Reached render stage without userData or error. User might be logged out or state is inconsistent.");
+         return (
+             <div className="flex items-center justify-center h-64">
+                <p className="text-muted-foreground">Loading user data or not logged in...</p>
+            </div>
+         );
+     }
+
+
   return (
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Welcome, {loadingUser ? <Skeleton className="h-6 w-32 inline-block" /> : userData?.displayName || 'User'}!</CardTitle>
+          <CardTitle>Welcome, {userData.displayName || 'User'}!</CardTitle>
           <CardDescription>
             Here's a quick look at your dashboard and the latest trends for your niche{userData?.selectedNiches?.length > 1 ? 's' : ''}.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {loadingUser ? (
-            <Skeleton className="h-5 w-48" />
-          ) : userData?.selectedNiches ? (
+          {userData.selectedNiches && userData.selectedNiches.length > 0 ? (
             <p>Your selected niche{userData.selectedNiches.length > 1 ? 's' : ''}: <span className="font-semibold">{userData.selectedNiches.join(', ')}</span></p>
           ) : (
              <p className="text-muted-foreground">No niche selected. <Link href="/dashboard/settings" className="text-accent hover:underline">Go to settings to add one.</Link></p>
@@ -181,7 +268,6 @@ export default function DashboardPage() {
            </Link>
         </CardHeader>
         <CardContent>
-          {error && <Alert variant="destructive"><AlertTitle>Error</AlertTitle><AlertDescription>{error}</AlertDescription></Alert>}
           {loadingTrends ? (
             <div className="space-y-4">
               {[...Array(3)].map((_, i) => (
@@ -246,3 +332,4 @@ export default function DashboardPage() {
     </div>
   );
 }
+
