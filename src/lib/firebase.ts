@@ -1,7 +1,8 @@
 
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import { getAuth, Auth } from 'firebase/auth';
-import { getFirestore, Firestore } from 'firebase/firestore';
+// Updated imports for Firestore v9+ persistence
+import { getFirestore, Firestore, initializeFirestore, persistentLocalCache, CACHE_SIZE_UNLIMITED } from 'firebase/firestore';
 import { getStorage, FirebaseStorage } from 'firebase/storage';
 
 // Ensure environment variables are being read correctly.
@@ -26,6 +27,18 @@ let storage: FirebaseStorage;
 // Flag to check if Firebase was initialized successfully
 let firebaseInitialized = false;
 
+// This console log helps verify environment variables are loaded on the client
+console.log("Firebase Config Used:", {
+    apiKey: firebaseConfig.apiKey ? '********' : 'MISSING', // Don't log the actual key
+    authDomain: firebaseConfig.authDomain,
+    projectId: firebaseConfig.projectId,
+    storageBucket: firebaseConfig.storageBucket,
+    messagingSenderId: firebaseConfig.messagingSenderId,
+    appId: firebaseConfig.appId,
+    measurementId: firebaseConfig.measurementId,
+});
+
+
 if (typeof window !== 'undefined') { // Ensure this runs only on the client
     // Validate Firebase config more explicitly
     const missingVars = Object.entries(firebaseConfig)
@@ -33,7 +46,7 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
           // Allow measurementId to be optional
           key !== 'measurementId' &&
           // Check for undefined/null/empty string or common placeholder patterns
-          (!value || value.startsWith('YOUR_') || value.startsWith('PLACEHOLDER_')) // Generic placeholder check
+          (!value || value.startsWith('YOUR_') || value.startsWith('PLACEHOLDER_') || value.startsWith('AIza')) // Check for common placeholder/example API key starts
       )
       .map(([key]) => `NEXT_PUBLIC_FIREBASE_${key.replace(/([A-Z])/g, '_$1').toUpperCase()}`); // Format key name like NEXT_PUBLIC_FIREBASE_API_KEY
 
@@ -61,7 +74,15 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
             }
              // Initialize services after ensuring app exists
             auth = getAuth(app);
-            db = getFirestore(app);
+             // Initialize Firestore with persistence enabled using persistentLocalCache
+            db = initializeFirestore(app, {
+                ignoreUndefinedProperties: true, // Optional: Recommended for consistency
+                localCache: persistentLocalCache({cacheSizeBytes: CACHE_SIZE_UNLIMITED}) // Enable offline persistence
+                // Use persistentMultipleTabCache if needed: persistentMultipleTabCache(/* optional config */)
+            });
+            console.log("Firestore initialized with offline persistence enabled (using persistentLocalCache).");
+
+
             storage = getStorage(app);
             firebaseInitialized = true;
             console.log("Firebase services initialized/attached.");
@@ -70,8 +91,21 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
             console.warn(
               "Firebase Initialized: If you encounter 'auth/configuration-not-found' errors, " +
               "ensure you have enabled the necessary sign-in methods (e.g., Email/Password, Google) " +
-              "in your Firebase project console (Authentication > Sign-in method)."
+              "in your Firebase project console (Authentication > Sign-in method). Also ensure your domain is authorized (Authentication > Settings > Authorized domains)."
             );
+
+             // Add warning for App Check issues causing recaptcha errors
+             console.warn(
+                "Firebase Auth: If you encounter '_getRecaptchaConfig is not a function' or similar errors, " +
+                "it might relate to App Check. Ensure App Check is correctly configured for your web app in the Firebase Console " +
+                "(Project Settings > App Check > Apps), including registering the reCAPTCHA keys."
+             );
+             // Add warning for unauthorized domains
+            console.warn(
+                 "Firebase Auth: If you encounter 'auth/unauthorized-domain' errors, ensure the current domain (e.g., localhost, your deployed domain) is listed in the 'Authorized domains' " +
+                 "section under Firebase Console > Authentication > Settings."
+             );
+
 
         } catch (e) {
              console.error("Firebase initialization or service attachment error:", e);
@@ -86,8 +120,13 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
              } else if ((e as Error).message?.includes('_getRecaptchaConfig is not a function')) {
                 console.error(
                     "Firebase Auth Error related to reCAPTCHA. This might indicate an issue with App Check configuration in your Firebase project. " +
-                    "If using App Check, ensure it's correctly set up for your web app (Project Settings > App Check). " +
+                    "If using App Check, ensure it's correctly set up for your web app (Project Settings > App Check > Apps). " +
                     "If not intentionally using App Check, this might be an internal SDK issue or conflict."
+                 );
+             } else if ((e as Error).message?.includes('auth/unauthorized-domain')) {
+                 console.error(
+                     "Firebase Auth Error: 'auth/unauthorized-domain'. The current domain is not authorized for OAuth operations. " +
+                     "Go to the Firebase Console > Authentication > Settings > Authorized domains and add your application's domain(s) (e.g., localhost, your-deployed-domain.com)."
                  );
              }
              app = {} as FirebaseApp; // Assign dummy on error
