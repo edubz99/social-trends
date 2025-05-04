@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
 import { createContext, useContext, useEffect, useState } from 'react';
 import type { User } from 'firebase/auth';
 import { onAuthStateChanged } from 'firebase/auth';
-import { auth } from '@/lib/firebase';
+import { auth, firebaseInitialized } from '@/lib/firebase'; // Import firebaseInitialized
 
 interface AuthContextProps {
   user: User | null;
@@ -22,14 +22,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
-      setLoading(false);
-    });
+    let unsubscribe: (() => void) | undefined = undefined;
+
+    if (firebaseInitialized) {
+        // Only subscribe if Firebase is initialized
+        unsubscribe = onAuthStateChanged(auth, (user) => {
+            setUser(user);
+            setLoading(false);
+        }, (error) => {
+            // Handle potential errors during auth state listening
+            console.error("Auth state change error:", error);
+            setUser(null);
+            setLoading(false);
+        });
+    } else {
+        // If Firebase is not initialized, set loading to false immediately
+        console.warn("AuthProvider: Firebase not initialized, skipping auth state listener.");
+        setLoading(false);
+    }
+
 
     // Cleanup subscription on unmount
-    return () => unsubscribe();
-  }, []);
+    return () => {
+        if (unsubscribe) {
+            unsubscribe();
+        }
+    };
+  }, []); // Dependency array remains empty as we check firebaseInitialized internally
 
   return (
     <AuthContext.Provider value={{ user, loading }}>
