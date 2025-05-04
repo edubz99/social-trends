@@ -33,7 +33,7 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
           // Allow measurementId to be optional
           key !== 'measurementId' &&
           // Check for undefined/null/empty string or common placeholder patterns
-          (!value || value.startsWith('YOUR_') || (key === 'apiKey' && value.startsWith('AIzaSyC4UAODk-fZgpBml8aK88iqHrVLaXWnO-o'))) // Check specific placeholder API key
+          (!value || value.startsWith('YOUR_') || value.startsWith('PLACEHOLDER_')) // Generic placeholder check
       )
       .map(([key]) => `NEXT_PUBLIC_FIREBASE_${key.replace(/([A-Z])/g, '_$1').toUpperCase()}`); // Format key name like NEXT_PUBLIC_FIREBASE_API_KEY
 
@@ -82,6 +82,12 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
                  console.error(
                     "Firebase Auth Error: 'auth/configuration-not-found'. This usually means the Email/Password (or other) " +
                     "sign-in provider is not enabled in your Firebase project console. Go to Authentication > Sign-in method and enable it."
+                 );
+             } else if ((e as Error).message?.includes('_getRecaptchaConfig is not a function')) {
+                console.error(
+                    "Firebase Auth Error related to reCAPTCHA. This might indicate an issue with App Check configuration in your Firebase project. " +
+                    "If using App Check, ensure it's correctly set up for your web app (Project Settings > App Check). " +
+                    "If not intentionally using App Check, this might be an internal SDK issue or conflict."
                  );
              }
              app = {} as FirebaseApp; // Assign dummy on error
