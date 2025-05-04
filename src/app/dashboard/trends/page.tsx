@@ -12,10 +12,14 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Star, Filter, Calendar } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { formatDistanceToNow } from 'date-fns'; // For showing relative time
+import { getTikTokTrends, type TikTokTrend } from '@/services/tiktok';
+import { getInstagramReelTrends, type InstagramReelTrend } from '@/services/instagram';
+import { getYoutubeTrends, type YoutubeTrend } from '@/services/youtube';
 
-// Mock trend data structure - expanded
+
+// Unified trend data structure used in the UI
 interface Trend {
-    id: string;
+    id: string; // Use URL as a unique ID
     title: string;
     platform: 'TikTok' | 'Instagram' | 'YouTube';
     views?: number;
@@ -24,48 +28,123 @@ interface Trend {
     url: string;
     saved?: boolean;
     description?: string;
-    discoveredAt: Date; // When the trend was first detected
+    discoveredAt: Date; // When the trend was first detected/fetched
     growthRate?: number; // Optional: growth indicator
 }
 
-// Mock function to fetch trends - enhance with filters
-async function fetchAllTrends(filters: { niche?: string; platform?: string; dateRange?: string }): Promise<Trend[]> {
-    console.log(`Fetching all trends with filters:`, filters);
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 1500));
+// Function to fetch and combine trends from all platforms
+async function fetchCombinedTrends(): Promise<Trend[]> {
+    console.log(`Fetching trends from all platforms`);
+    let combinedTrends: Trend[] = [];
+    const now = new Date(); // Use a consistent timestamp for trends fetched in this batch
 
-    // Example data - replace with real data fetching logic from your backend/service
-    const mockTrends: Trend[] = Array.from({ length: 20 }, (_, i) => {
-        const platforms: ('TikTok' | 'Instagram' | 'YouTube')[] = ['TikTok', 'Instagram', 'YouTube'];
-        const platform = platforms[i % 3];
-        const niche = ["Fashion", "Tech", "Food", "Fitness"][i % 4];
-        return {
-            id: `trend-${i + 1}`,
-            title: `Trending ${niche} Content ${i + 1}`,
-            platform: platform,
-            views: platform !== 'Instagram' ? Math.floor(Math.random() * 5000000) + 100000 : undefined,
-            likes: platform === 'Instagram' ? Math.floor(Math.random() * 200000) + 5000 : undefined,
-            category: niche,
-            url: '#', // Replace with actual URLs
-            saved: Math.random() > 0.8, // Simulate some saved trends
-            description: `Description for trending ${niche} content ${i + 1}. Lorem ipsum dolor sit amet.`,
-            discoveredAt: new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000), // Discovered within last 7 days
-            growthRate: Math.random() > 0.7 ? Math.floor(Math.random() * 300) + 50 : undefined, // Simulate explosive growth
-        };
-    });
+    try {
+        // Use Promise.allSettled to fetch from all sources even if one fails
+        const results = await Promise.allSettled([
+            getTikTokTrends(),
+            getInstagramReelTrends(),
+            getYoutubeTrends(),
+        ]);
 
-    // Apply filters (simple mock implementation)
-    let filteredTrends = mockTrends;
-    if (filters.niche && filters.niche !== 'all') {
-        filteredTrends = filteredTrends.filter(t => t.category?.toLowerCase() === filters.niche?.toLowerCase());
+        // Process TikTok results
+        if (results[0].status === 'fulfilled') {
+            const tiktokTrends = results[0].value.map((trend: TikTokTrend): Trend => ({
+                id: trend.url, // Use URL as ID
+                title: trend.title,
+                platform: 'TikTok',
+                views: trend.views,
+                url: trend.url,
+                discoveredAt: now,
+                // category: Needs AI assignment later
+                // description: Potentially add later
+            }));
+            combinedTrends = combinedTrends.concat(tiktokTrends);
+        } else {
+            console.error("Failed to fetch TikTok trends:", results[0].reason);
+        }
+
+        // Process Instagram results
+        if (results[1].status === 'fulfilled') {
+            const instagramTrends = results[1].value.map((trend: InstagramReelTrend): Trend => ({
+                id: trend.url,
+                title: trend.title,
+                platform: 'Instagram',
+                likes: trend.likes,
+                url: trend.url,
+                discoveredAt: now,
+            }));
+            combinedTrends = combinedTrends.concat(instagramTrends);
+        } else {
+            console.error("Failed to fetch Instagram trends:", results[1].reason);
+        }
+
+        // Process YouTube results
+        if (results[2].status === 'fulfilled') {
+            const youtubeTrends = results[2].value.map((trend: YoutubeTrend): Trend => ({
+                id: trend.url,
+                title: trend.title,
+                platform: 'YouTube',
+                views: trend.views,
+                url: trend.url,
+                discoveredAt: now,
+            }));
+            combinedTrends = combinedTrends.concat(youtubeTrends);
+        } else {
+            console.error("Failed to fetch YouTube trends:", results[2].reason);
+        }
+
+        // TODO: Add AI categorization step here using `categorizeTrend` flow
+
+    } catch (error) {
+        console.error("Error fetching combined trends:", error);
     }
-    if (filters.platform && filters.platform !== 'all') {
-        filteredTrends = filteredTrends.filter(t => t.platform.toLowerCase() === filters.platform?.toLowerCase());
-    }
-    // Add date range filtering if needed based on `filters.dateRange`
 
-    return filteredTrends;
+    return combinedTrends;
 }
+
+
+// Function to filter combined trends by niche and platform
+function filterTrends(
+    trends: Trend[],
+    filters: { niche?: string; platform?: string; dateRange?: string }
+): Trend[] {
+    let filtered = trends;
+
+    // Filter by Niche (basic implementation, relies on title/desc/category)
+    if (filters.niche && filters.niche !== 'all') {
+        const lowerCaseNiche = filters.niche.toLowerCase();
+        filtered = filtered.filter(t =>
+            t.category?.toLowerCase() === lowerCaseNiche || // Primarily use category if available
+            t.title.toLowerCase().includes(lowerCaseNiche) ||
+            t.description?.toLowerCase().includes(lowerCaseNiche)
+        );
+    }
+
+    // Filter by Platform
+    if (filters.platform && filters.platform !== 'all') {
+        filtered = filtered.filter(t => t.platform.toLowerCase() === filters.platform?.toLowerCase());
+    }
+
+    // Filter by Date Range (using discoveredAt)
+    if (filters.dateRange) {
+        const now = Date.now();
+        let cutoffDate = now;
+        if (filters.dateRange === 'today') {
+            cutoffDate = new Date().setHours(0, 0, 0, 0);
+        } else if (filters.dateRange === 'last_3_days') {
+            cutoffDate = now - 3 * 24 * 60 * 60 * 1000;
+        } else if (filters.dateRange === 'last_7_days') {
+            cutoffDate = now - 7 * 24 * 60 * 60 * 1000;
+        }
+        filtered = filtered.filter(t => t.discoveredAt.getTime() >= cutoffDate);
+    }
+
+    // Sort by discovered date, newest first
+    filtered.sort((a, b) => b.discoveredAt.getTime() - a.discoveredAt.getTime());
+
+    return filtered;
+}
+
 
 // Fetch user data including saved trends and niches
 async function fetchUserDataWithDetails(uid: string) {
@@ -88,15 +167,17 @@ async function fetchUserDataWithDetails(uid: string) {
     }
 }
 
-// Example niches, ideally fetch from config or user settings
-const NICHES = ["all", "Fashion", "Beauty", "Fitness", "Food", "Travel", "Tech", "Gaming", "Finance", "Education", "DIY", "Comedy", "Dance", "Music", "Art"];
+// Available niches for filtering, should align with settings/signup
+// Consider fetching this from a central config or Firestore if it changes often
+const AVAILABLE_NICHES = ["all", "Fashion", "Beauty", "Fitness", "Food", "Travel", "Tech", "Gaming", "Finance", "Education", "DIY", "Comedy", "Dance", "Music", "Art", "Pets", "Parenting", "Lifestyle", "Business"].sort((a, b) => a === 'all' ? -1 : b === 'all' ? 1 : a.localeCompare(b));
 const PLATFORMS = ["all", "TikTok", "Instagram", "YouTube"];
 const DATE_RANGES = ["today", "last_3_days", "last_7_days"];
 
 export default function TrendsPage() {
   const { user } = useAuth();
   const [userData, setUserData] = useState<Awaited<ReturnType<typeof fetchUserDataWithDetails>> | null>(null);
-  const [trends, setTrends] = useState<Trend[]>([]);
+  const [allTrends, setAllTrends] = useState<Trend[]>([]); // Store all fetched trends
+  const [filteredTrends, setFilteredTrends] = useState<Trend[]>([]); // Trends displayed after filtering
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -111,30 +192,37 @@ export default function TrendsPage() {
         setLoading(true);
         setError(null);
         try {
-          const fetchedUserData = await fetchUserDataWithDetails(user.uid);
+          const [fetchedUserData, fetchedTrends] = await Promise.all([
+            fetchUserDataWithDetails(user.uid),
+            fetchCombinedTrends(), // Fetch all trends initially
+          ]);
+
           setUserData(fetchedUserData);
+          setAllTrends(fetchedTrends); // Store all fetched trends
 
           // Set initial niche filter based on user's primary niche if available
           const initialNiche = fetchedUserData?.primaryNiche || 'all';
           setSelectedNiche(initialNiche);
 
-          const fetchedTrends = await fetchAllTrends({
+          // Apply initial filters and saved status
+          const currentFilters = {
               niche: initialNiche,
-              platform: selectedPlatform,
-              dateRange: selectedDateRange
-          });
+              platform: selectedPlatform, // Use current state
+              dateRange: selectedDateRange // Use current state
+          };
+          const initiallyFiltered = filterTrends(fetchedTrends, currentFilters);
 
-          // Mark trends as saved based on user data
           const savedIds = fetchedUserData?.savedTrendIds || [];
-          const trendsWithSaveStatus = fetchedTrends.map(trend => ({
+          const trendsWithSaveStatus = initiallyFiltered.map(trend => ({
              ...trend,
              saved: savedIds.includes(trend.id),
           }));
 
-          setTrends(trendsWithSaveStatus);
+          setFilteredTrends(trendsWithSaveStatus);
+
         } catch (err) {
-          console.error("Error loading trends:", err);
-          setError("Could not load trends. Please try again later.");
+          console.error("Error loading initial data:", err);
+          setError("Could not load trends or user data. Please try again later.");
         } finally {
           setLoading(false);
         }
@@ -143,37 +231,36 @@ export default function TrendsPage() {
     }
   }, [user]); // Load initial data on user load
 
-  // Effect to refetch trends when filters change
+  // Effect to re-apply filters when filters or allTrends change
   useEffect(() => {
-    // Don't run on initial mount if user isn't loaded yet
-    if (!user || loading) return;
+    // Don't run if initial load is happening or user isn't loaded
+    if (loading || !user || allTrends.length === 0) return;
 
-    const refetchTrends = async () => {
-        setLoading(true); // Indicate loading state for trends specifically
+    const applyFilters = () => {
         setError(null);
         try {
-             const fetchedTrends = await fetchAllTrends({
+             const currentFilters = {
                 niche: selectedNiche,
                 platform: selectedPlatform,
                 dateRange: selectedDateRange
-             });
+             };
+             let newlyFiltered = filterTrends(allTrends, currentFilters);
+
              // Re-apply saved status based on current userData
              const savedIds = userData?.savedTrendIds || [];
-             const trendsWithSaveStatus = fetchedTrends.map(trend => ({
+             newlyFiltered = newlyFiltered.map(trend => ({
                  ...trend,
                  saved: savedIds.includes(trend.id),
              }));
-             setTrends(trendsWithSaveStatus);
+             setFilteredTrends(newlyFiltered);
         } catch (err) {
-             console.error("Error refetching trends:", err);
-             setError("Could not load trends with the selected filters.");
-        } finally {
-            setLoading(false);
+             console.error("Error applying filters:", err);
+             setError("Could not apply filters to the trends.");
         }
     };
 
-    refetchTrends();
-  }, [selectedNiche, selectedPlatform, selectedDateRange, user, userData?.savedTrendIds]); // Rerun when filters or user's saved trends change
+    applyFilters();
+  }, [selectedNiche, selectedPlatform, selectedDateRange, allTrends, userData?.savedTrendIds, loading, user]); // Rerun when filters, allTrends, or saved status change
 
 
   const handleSaveTrend = async (trendId: string, currentlySaved: boolean) => {
@@ -185,11 +272,15 @@ export default function TrendsPage() {
          return;
      }
 
-     // Optimistic UI update
-     const originalTrends = [...trends];
-     setTrends(prevTrends =>
+     // Optimistic UI update for displayed trends
+     setFilteredTrends(prevTrends =>
          prevTrends.map(t => t.id === trendId ? { ...t, saved: !currentlySaved } : t)
      );
+      // Optimistic UI update for all trends store
+     setAllTrends(prevTrends =>
+         prevTrends.map(t => t.id === trendId ? { ...t, saved: !currentlySaved } : t)
+     );
+     // Optimistic update for userData's savedTrendIds
      setUserData(prevUserData => ({
          ...prevUserData!,
          savedTrendIds: currentlySaved
@@ -206,9 +297,14 @@ export default function TrendsPage() {
         console.log(`Trend ${trendId} ${currentlySaved ? 'unsaved' : 'saved'} successfully.`);
      } catch (error) {
         console.error("Failed to update saved trend:", error);
-        // Revert optimistic update on error
-        setTrends(originalTrends);
-        setUserData(prevUserData => ({ // Revert userData change
+        // Revert optimistic updates on error
+        setFilteredTrends(prevTrends =>
+            prevTrends.map(t => t.id === trendId ? { ...t, saved: currentlySaved } : t)
+        );
+        setAllTrends(prevTrends =>
+            prevTrends.map(t => t.id === trendId ? { ...t, saved: currentlySaved } : t)
+        );
+        setUserData(prevUserData => ({
             ...prevUserData!,
             savedTrendIds: currentlySaved
                 ? [...(prevUserData?.savedTrendIds || []), trendId] // Add it back if removal failed
@@ -235,7 +331,7 @@ export default function TrendsPage() {
                         <SelectValue placeholder="Filter by niche" />
                     </SelectTrigger>
                     <SelectContent>
-                        {NICHES.map((niche) => (
+                        {AVAILABLE_NICHES.map((niche) => (
                             <SelectItem key={niche} value={niche}>
                                 {niche === 'all' ? 'All Niches' : niche}
                             </SelectItem>
@@ -291,9 +387,9 @@ export default function TrendsPage() {
                  </div>
               ))}
             </div>
-          ) : trends.length > 0 ? (
+          ) : filteredTrends.length > 0 ? (
             <ul className="space-y-4">
-              {trends.map((trend) => (
+              {filteredTrends.map((trend) => (
                 <li key={trend.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors">
                    <div className="flex items-start gap-4 mb-2 sm:mb-0 flex-grow">
                        {/* Platform Icon Placeholder */}
@@ -307,9 +403,9 @@ export default function TrendsPage() {
                             {trend.title}
                           </a>
                            <p className="text-sm text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 mt-1">
-                                <span className="inline-flex items-center"><Filter className="h-3 w-3 mr-1" /> {trend.category}</span>
-                                {trend.views && <span>• {(trend.views / 1000000).toFixed(1)}M views</span>}
-                                {trend.likes && <span>• {(trend.likes / 1000).toFixed(1)}K likes</span>}
+                               {trend.category && <span className="inline-flex items-center"><Filter className="h-3 w-3 mr-1" /> {trend.category}</span> }
+                                {trend.views != null && <span>• {(trend.views / 1000000).toFixed(1)}M views</span>}
+                                {trend.likes != null && <span>• {(trend.likes / 1000).toFixed(1)}K likes</span>}
                                 <span className="inline-flex items-center"><Calendar className="h-3 w-3 mr-1" /> {formatDistanceToNow(trend.discoveredAt, { addSuffix: true })}</span>
                             </p>
                             {trend.description && <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{trend.description}</p>}
@@ -338,3 +434,4 @@ export default function TrendsPage() {
 }
 
 import { Label } from '@/components/ui/label'; // Ensure Label is imported
+

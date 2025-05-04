@@ -11,37 +11,114 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Rocket, Star, Settings, WifiOff } from 'lucide-react'; // Add WifiOff icon
 import Link from 'next/link';
+import { getTikTokTrends, type TikTokTrend } from '@/services/tiktok';
+import { getInstagramReelTrends, type InstagramReelTrend } from '@/services/instagram';
+import { getYoutubeTrends, type YoutubeTrend } from '@/services/youtube';
 
-// Mock trend data structure
+// Unified trend data structure used in the UI
 interface Trend {
-    id: string;
+    id: string; // Use URL as a unique ID for now
     title: string;
     platform: 'TikTok' | 'Instagram' | 'YouTube';
     views?: number;
     likes?: number;
-    category?: string;
+    category?: string; // Category might need AI assignment later
     url: string;
     saved?: boolean; // Add saved status
     description?: string; // Optional description
+    discoveredAt: Date; // When the trend was fetched/discovered
 }
 
-// Mock function to fetch trends - replace with actual API call later
-async function fetchTrendsForNiche(niche: string): Promise<Trend[]> {
-  console.log(`Fetching trends for niche: ${niche}`);
-  // Simulate API delay
-  await new Promise(resolve => setTimeout(resolve, 1000));
 
-  // Example data - replace with real data fetching logic
-  const mockTrends: Trend[] = [
-    { id: '1', title: `Viral Dance Challenge in ${niche}`, platform: 'TikTok', views: 1500000, url: '#', saved: false, description: "A new dance trend taking over TikTok." },
-    { id: '2', title: `Easy ${niche} Recipe Reel`, platform: 'Instagram', likes: 80000, url: '#', saved: true, description: "Quick and tasty recipe perfect for your niche." },
-    { id: '3', title: `${niche} Tech Unboxing Short`, platform: 'YouTube', views: 300000, url: '#', saved: false, description: "Unboxing the latest gadget relevant to your niche." },
-    { id: '4', title: `Funny ${niche} Skit`, platform: 'TikTok', views: 2200000, url: '#', saved: false, description: "A humorous take on a common situation in your niche." },
-    { id: '5', title: `Top 5 ${niche} Tips`, platform: 'YouTube', views: 500000, url: '#', saved: false, description: "Helpful tips and tricks for your audience." },
-  ];
-  // Filter/Tailor based on niche for more realistic simulation
-  return mockTrends.filter(trend => trend.title.toLowerCase().includes(niche.toLowerCase()) || Math.random() > 0.3).slice(0, 3); // Show top 3
+// Function to fetch and combine trends from all platforms
+async function fetchCombinedTrends(): Promise<Trend[]> {
+    console.log(`Fetching trends from all platforms`);
+    let combinedTrends: Trend[] = [];
+    const now = new Date(); // Use a consistent timestamp for trends fetched in this batch
+
+    try {
+        // Use Promise.allSettled to fetch from all sources even if one fails
+        const results = await Promise.allSettled([
+            getTikTokTrends(),
+            getInstagramReelTrends(),
+            getYoutubeTrends(),
+        ]);
+
+        // Process TikTok results
+        if (results[0].status === 'fulfilled') {
+            const tiktokTrends = results[0].value.map((trend: TikTokTrend): Trend => ({
+                id: trend.url, // Use URL as ID
+                title: trend.title,
+                platform: 'TikTok',
+                views: trend.views,
+                url: trend.url,
+                discoveredAt: now,
+                // category: Needs AI assignment later
+                // description: Potentially add later
+            }));
+            combinedTrends = combinedTrends.concat(tiktokTrends);
+        } else {
+            console.error("Failed to fetch TikTok trends:", results[0].reason);
+        }
+
+        // Process Instagram results
+        if (results[1].status === 'fulfilled') {
+            const instagramTrends = results[1].value.map((trend: InstagramReelTrend): Trend => ({
+                id: trend.url,
+                title: trend.title,
+                platform: 'Instagram',
+                likes: trend.likes,
+                url: trend.url,
+                discoveredAt: now,
+            }));
+            combinedTrends = combinedTrends.concat(instagramTrends);
+        } else {
+            console.error("Failed to fetch Instagram trends:", results[1].reason);
+        }
+
+        // Process YouTube results
+        if (results[2].status === 'fulfilled') {
+            const youtubeTrends = results[2].value.map((trend: YoutubeTrend): Trend => ({
+                id: trend.url,
+                title: trend.title,
+                platform: 'YouTube',
+                views: trend.views,
+                url: trend.url,
+                discoveredAt: now,
+            }));
+            combinedTrends = combinedTrends.concat(youtubeTrends);
+        } else {
+            console.error("Failed to fetch YouTube trends:", results[2].reason);
+        }
+
+        // TODO: Add AI categorization step here if needed
+        // For now, we might need to rely on filtering by title/description
+
+    } catch (error) {
+        console.error("Error fetching combined trends:", error);
+        // Depending on requirements, you might want to throw the error
+        // or return an empty array / partial results.
+    }
+
+    return combinedTrends;
 }
+
+
+// Function to filter combined trends by niche (simple title-based filtering for now)
+function filterTrendsByNiche(trends: Trend[], niche: string): Trend[] {
+    if (!niche || niche.toLowerCase() === 'all') {
+        return trends;
+    }
+    const lowerCaseNiche = niche.toLowerCase();
+    // Basic filtering: check if niche appears in title or description
+    // This should ideally be replaced by AI-assigned category filtering
+    return trends.filter(trend =>
+        trend.title.toLowerCase().includes(lowerCaseNiche) ||
+        trend.description?.toLowerCase().includes(lowerCaseNiche) ||
+        trend.category?.toLowerCase() === lowerCaseNiche // If category is assigned
+    );
+}
+
 
 // Mock function to fetch user data
 async function fetchUserData(uid: string) {
@@ -88,7 +165,7 @@ export default function DashboardPage() {
           }
         } catch (err) {
           console.error("Error fetching user data:", err);
-          if (err instanceof FirestoreError && (err.code === 'unavailable' || err.code === 'cancelled')) {
+          if (err instanceof FirestoreError && (err.code === 'unavailable' || err.code === 'cancelled' || err.message.includes('offline'))) {
               // Specific Firestore offline/unavailable error codes
               setError("Could not load user information. You appear to be offline. Some data may be cached.");
               setIsOfflineError(true);
@@ -129,7 +206,7 @@ export default function DashboardPage() {
 
  useEffect(() => {
     // Only try to load trends if user data exists and niches are selected
-    // Allow loading trends even if offline, assuming `fetchTrendsForNiche` can handle it (e.g., return empty or cached data)
+    // Allow loading trends even if offline, assuming fetchCombinedTrends handles it (e.g., return empty or cached data)
     if (userData && !loadingUser) {
       if (userData.selectedNiches && userData.selectedNiches.length > 0) {
           const loadTrends = async () => {
@@ -137,14 +214,25 @@ export default function DashboardPage() {
             // Keep offline error if it was set during user data loading, don't clear it here.
             // setError(null); // Avoid clearing offline error
             try {
-              // For simplicity, fetch trends for the primary niche in MVP
-              // In paid version, iterate through userData.selectedNiches
+              // Fetch trends from all platforms
+              const allTrends = await fetchCombinedTrends();
+
+              // Filter for the user's primary niche for the dashboard view
               const primaryNiche = userData.primaryNiche || userData.selectedNiches[0];
-              const fetchedTrends = await fetchTrendsForNiche(primaryNiche);
-              // TODO: Check saved status against user's saved trends in Firestore
-              setTrends(fetchedTrends);
+              let nicheTrends = filterTrendsByNiche(allTrends, primaryNiche);
+
+              // Apply saved status
+              const savedIds = userData?.savedTrendIds || [];
+              nicheTrends = nicheTrends.map(trend => ({
+                 ...trend,
+                 saved: savedIds.includes(trend.id),
+              }));
+
+              // Limit to top N trends for the dashboard
+              setTrends(nicheTrends.slice(0, 5)); // Show top 5 for dashboard
+
             } catch (err) {
-              console.error("Error fetching trends:", err);
+              console.error("Error fetching or processing trends:", err);
               setError(prevError => prevError || "Could not load trends. Please try again later."); // Don't overwrite existing errors
             } finally {
               setLoadingTrends(false);
@@ -347,7 +435,7 @@ export default function DashboardPage() {
                                 </svg>
                             }
                            {trend.platform === 'Instagram' && <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="currentColor" viewBox="0 0 16 16">
-                                <path d="M8 0C5.829 0 5.556.01 4.703.048 3.85.088 3.269.222 2.76.42a3.917 3.917 0 0 0-1.417.923A3.917 3.917 0 0 0 .42 2.76C.222 3.268.087 3.85.048 4.7.01 5.555 0 5.827 0 8.001c0 2.172.01 2.444.048 3.297.04.85.175 1.433.372 1.942.205.526.478.972.923 1.417.444.445.89.719 1.416.923.51.198 1.09.333 1.942.372C5.555 15.99 5.827 16 8 16s2.444-.01 3.298-.048c.851-.04 1.434-.174 1.943-.372a3.916 3.916 0 0 0 1.416-.923c.445-.445.718-.891.923-1.417.197-.509.332-1.09.372-1.942C15.99 10.445 16 10.173 16 8s-.01-2.445-.048-3.299c-.04-.851-.175-1.433-.372-1.941a3.916 3.916 0 0 0-.923-1.417A3.916 3.916 0 0 0 13.24.42c-.51-.198-1.092-.333-1.943-.372C10.443.01 10.172 0 7.998 0h.003zm-.717 1.442h.718c2.136 0 2.389.007 3.232.046.78.035 1.204.166 1.486.275.373.145.64.319.92.599.28.28.453.546.598.92.11.281.24.705.275 1.485.039.843.047 1.096.047 3.231s-.008 2.389-.047 3.232c-.035.78-.166 1.203-.275 1.485a2.47 2.47 0 0 1-.599.919c-.28.28-.546.453-.92.598-.28.11-.704.24-1.485.276-.843.038-1.096.047-3.232.047s-2.389-.009-3.232-.047c-.78-.036-1.203-.166-1.485-.276a2.478 2.478 0 0 1-.92-.598 2.48 2.48 0 0 1-.6-.92c-.109-.281-.24-.705-.275-1.485-.038-.843-.046-1.096-.046-3.231 0-2.136.008-2.388.046-3.231.036-.78.166-1.204.276-1.486.145-.373.319-.64.599-.92.28-.28.546.453.92-.598.282-.11.705-.24 1.485-.276.738-.034 1.024-.044 2.515-.045v.002zm4.988 1.328a.96.96 0 1 0 0 1.92.96.96 0 0 0 0-1.92zm-4.27 1.122a4.109 4.109 0 1 0 0 8.217 4.109 4.109 0 0 0 0-8.217zm0 1.441a2.667 2.667 0 1 1 0 5.334 2.667 2.667 0 0 1 0-5.334z"/>
+                                <path d="M8 0C5.829 0 5.556.01 4.703.048 3.85.088 3.269.222 2.76.42a3.917 3.917 0 0 0-1.417.923A3.917 3.917 0 0 0 .42 2.76C.222 3.268.087 3.85.048 4.7.01 5.555 0 5.827 0 8.001c0 2.172.01 2.444.048 3.297.04.85.175 1.433.372 1.942.205.526.478.972.923 1.417.444.445.89.719 1.416.923.51.198 1.09.333 1.942.372C5.555 15.99 5.827 16 8 16s2.444-.01 3.298-.048c.851-.04 1.434-.174 1.943-.372a3.916 3.916 0 0 0 1.416-.923c.445-.445.718-.891.923-1.417.197-.509.332-1.09.372-1.942C15.99 10.445 16 10.173 16 8s-.01-2.445-.048-3.299c-.04-.851-.175-1.433-.372-1.941a3.916 3.916 0 0 0-.923-1.417A3.916 3.916 0 0 0 13.24.42c-.51-.198-1.092-.333-1.943-.372C10.443.01 10.172 0 7.998 0h.003zm-.717 1.442h.718c2.136 0 2.389.007 3.232.046.78.035 1.204.166 1.486.275.373.145.64.319.92.599.28.28.453.546.598.92.11.281.24.705.275 1.485.039.843.047 1.096.047 3.231s-.008 2.389-.047 3.232c-.035.78-.166 1.203-.275 1.485a2.47 2.47 0 0 1-.599.919c-.28.28-.546.453-.92.598-.28.11-.704.24-1.485.276-.843.038-1.096.047-3.232.047s-2.389-.009-3.232-.047c-.78-.036-1.203-.166-1.485-.276a2.478 2.478 0 0 1-.92-.598 2.48 2.48 0 0 1-.6-.92c-.109-.281-.24-.705-.275-1.485-.038-.843-.046-1.096-.046-3.231 0-2.136.008-2.388.046-3.231.036-.78.166-1.204.276-1.486.145-.373.319-.64.599-.92.28-.28.546-.453.92-.598.282-.11.705-.24 1.485-.276.738-.034 1.024-.044 2.515-.045v.002zm4.988 1.328a.96.96 0 1 0 0 1.92.96.96 0 0 0 0-1.92zm-4.27 1.122a4.109 4.109 0 1 0 0 8.217 4.109 4.109 0 0 0 0-8.217zm0 1.441a2.667 2.667 0 1 1 0 5.334 2.667 2.667 0 0 1 0-5.334z"/>
                             </svg>}
                            {trend.platform === 'YouTube' && <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-red-600" fill="currentColor" viewBox="0 0 16 16">
                                 <path d="M8.051 1.999h.089c.822.003 4.987.033 6.11.335a2.01 2.01 0 0 1 1.415 1.42c.101.38.172.883.22 1.402l.01.104.022.26.008.104c.065.914.073 1.77.074 1.957v.075c-.001.194-.01 1.102-.074 2.016l-.008.105-.022.259-.01.104c-.048.519-.119 1.023-.22 1.402a2.007 2.007 0 0 1-1.415 1.42c-1.16.312-5.569.334-6.18.335h-.142c-.309 0-1.587-.006-2.927-.052l-.17-.006-.087-.004-.171-.007-.171-.007c-1.11-.049-2.167-.128-2.654-.26a2.007 2.007 0 0 1-1.415-1.419c-.111-.417-.185-.986-.235-1.558L.09 9.82l-.008-.104A31.4 31.4 0 0 1 0 7.68v-.123c.002-.215.01-.958.064-1.778l.007-.103.003-.052.008-.104.022-.26.01-.104c.048-.519.119-1.023.22-1.402a2.007 2.007 0 0 1 1.415-1.42c.487-.13 1.544-.21 2.654-.26l.17-.007.171-.006.087-.004.171-.007.17-.006c1.34-.046 2.617-.052 2.927-.052H8.05zm-1.631 5.53l3.243 1.858-3.243 1.858V7.53z"/>
@@ -359,8 +447,8 @@ export default function DashboardPage() {
                           </a>
                            <p className="text-sm text-muted-foreground flex items-center gap-2 mt-1">
                                 <span>{trend.platform}</span>
-                                {trend.views && <span>• {(trend.views / 1000000).toFixed(1)}M views</span>}
-                                {trend.likes && <span>• {(trend.likes / 1000).toFixed(1)}K likes</span>}
+                                {trend.views != null && <span>• {(trend.views / 1000000).toFixed(1)}M views</span>}
+                                {trend.likes != null && <span>• {(trend.likes / 1000).toFixed(1)}K likes</span>}
                             </p>
                             {trend.description && <p className="text-sm text-muted-foreground mt-1">{trend.description}</p>}
                        </div>
@@ -383,7 +471,7 @@ export default function DashboardPage() {
             <p className="text-center text-muted-foreground py-8">
                 {isOfflineError
                     ? "Cannot load trends while offline."
-                    : "No trends found for your niche today. Check back later!"}
+                    : "No trends found for your niche today. Check back later or adjust settings!"}
             </p>
           )}
         </CardContent>
