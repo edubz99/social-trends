@@ -46,7 +46,7 @@ if (typeof window !== 'undefined') { // Ensure this runs only on the client
           // Allow measurementId to be optional
           key !== 'measurementId' &&
           // Check for undefined/null/empty string or common placeholder patterns
-           (!value || value.startsWith('YOUR_') || value.startsWith('PLACEHOLDER_') || value.startsWith('AIzaSyC4UAODk-fZgpBml8aK88iqHrVLaXWnO-o')) // Check common placeholder/example API keys. **Important**: Remove the hardcoded key check if your actual key starts like this, but it's a strong indicator of a placeholder.
+           (!value || value.startsWith('YOUR_') || value.startsWith('PLACEHOLDER_')) // Removed the check for 'AIzaSy...'
       )
       .map(([key]) => `NEXT_PUBLIC_FIREBASE_${key.replace(/([A-Z])/g, '_$1').toUpperCase()}`); // Format key name like NEXT_PUBLIC_FIREBASE_API_KEY
 
