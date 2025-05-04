@@ -13,35 +13,38 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
-// Validate Firebase config
-if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
-  console.error('Firebase API Key or Project ID is missing. Check your environment variables (e.g., .env file). Make sure they are prefixed with NEXT_PUBLIC_');
-  // Throwing an error might be too aggressive depending on the use case,
-  // but it makes the issue explicit during development.
-  // Consider logging instead for production builds if some parts of the app
-  // can function without Firebase.
-  // throw new Error("Firebase configuration is missing. See console for details.");
+// Initialize Firebase App
+let app: ReturnType<typeof initializeApp>;
+if (!getApps().length) {
+    if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
+        console.error('Firebase API Key or Project ID is missing. Check your environment variables (e.g., .env file). Make sure they are prefixed with NEXT_PUBLIC_');
+        // Set app to a dummy object or handle appropriately if Firebase is optional
+        // For now, we'll let it proceed, but auth/db calls will fail later.
+        app = {} as ReturnType<typeof initializeApp>; // Avoid hard crash, let downstream fail
+    } else {
+        app = initializeApp(firebaseConfig);
+    }
+} else {
+    app = getApp();
 }
 
 
-// Initialize Firebase
-let app;
+// Initialize Firebase services only if the app was initialized correctly
 let auth: ReturnType<typeof getAuth>;
 let db: ReturnType<typeof getFirestore>;
 let storage: ReturnType<typeof getStorage>;
 
-try {
-  app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-  auth = getAuth(app);
-  db = getFirestore(app);
-  storage = getStorage(app);
-} catch (error) {
-    console.error("Failed to initialize Firebase:", error);
-    // Handle the error appropriately - maybe show a message to the user
-    // or fallback to a non-Firebase dependent state.
-    // For now, we'll re-throw to make it obvious during development.
-    // In a real app, you might want to create dummy instances or handle this gracefully.
-    // throw error; // Uncomment if you want to halt execution on Firebase init failure
+// Check if app object looks like a valid Firebase app (basic check)
+if (app && app.options && app.options.apiKey) {
+    auth = getAuth(app);
+    db = getFirestore(app);
+    storage = getStorage(app);
+} else {
+    console.warn("Firebase app initialization failed or skipped due to missing config. Firebase services will not be available.");
+    // Provide dummy instances or null to prevent crashes if services are accessed
+    auth = {} as ReturnType<typeof getAuth>;
+    db = {} as ReturnType<typeof getFirestore>;
+    storage = {} as ReturnType<typeof getStorage>;
 }
 
 
