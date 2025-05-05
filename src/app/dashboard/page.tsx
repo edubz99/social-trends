@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useState } from 'react';
@@ -6,7 +5,7 @@ import { useEffect, useState } from 'react';
 import {
     doc, getDoc, updateDoc, arrayUnion, arrayRemove,
     collection, query, where, orderBy, limit, getDocs,
-    Timestamp, FirestoreError
+    Timestamp, FirestoreError, enableNetwork, disableNetwork // Import enableNetwork/disableNetwork
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/components/providers/auth-provider';
@@ -38,6 +37,9 @@ async function fetchUserData(uid: string) {
     console.log(`DashboardPage: Fetching user data for UID: ${uid}`);
     const userDocRef = doc(db, "users", uid);
     try {
+        // Explicitly try to enable network before fetching critical user data
+        await enableNetwork(db);
+        console.log("Network enabled for fetching user data.");
         const userDocSnap = await getDoc(userDocRef);
         if (userDocSnap.exists()) {
             console.log("DashboardPage: User document found:", userDocSnap.data());
@@ -48,7 +50,24 @@ async function fetchUserData(uid: string) {
         }
     } catch (error) {
         console.error(`DashboardPage: Error fetching user data for ${uid}:`, error);
-        throw error; // Rethrow to be handled by the caller
+        if (error instanceof FirestoreError && (error.code === 'unavailable' || error.message.includes('offline'))) {
+            console.warn("DashboardPage: Firestore appears to be offline trying to fetch user data.");
+            // Attempt to get from cache - Firestore's persistence handles this automatically if enabled
+            try {
+                const userDocSnap = await getDoc(userDocRef); // Try again, might get from cache
+                 if (userDocSnap.exists()) {
+                    console.log("DashboardPage: User document found in cache (offline).", userDocSnap.data());
+                    return userDocSnap.data();
+                } else {
+                     console.error("DashboardPage: User document not found, even in cache (offline).");
+                     throw new Error("Could not load user data. You appear to be offline and no cached data is available.");
+                 }
+            } catch (cacheError) {
+                 console.error("DashboardPage: Error fetching user data from cache:", cacheError);
+                 throw new Error("Could not load user data. You appear to be offline.");
+            }
+        }
+        throw error; // Rethrow other errors
     }
 }
 
@@ -77,6 +96,9 @@ async function fetchTrendsFromFirestore(niche: string, count: number = 5): Promi
 
 
     try {
+        // Explicitly try to enable network before fetching trends
+        await enableNetwork(db);
+        console.log("Network enabled for fetching trends.");
         const querySnapshot = await getDocs(trendsQuery);
         const trends: Trend[] = [];
         querySnapshot.forEach((docSnap) => {
@@ -116,8 +138,30 @@ async function fetchTrendsFromFirestore(niche: string, count: number = 5): Promi
              );
              throw new Error("Database query error: A required index is missing. Please check Firestore indexes or contact support.");
         } else if (error instanceof FirestoreError && (error.code === 'unavailable' || error.message.includes('offline'))) {
-            console.warn("DashboardPage: Firestore query failed: Client appears to be offline.");
-            throw new Error("Could not load trends. You appear to be offline.");
+            console.warn("DashboardPage: Firestore query failed for trends: Client appears to be offline.");
+             // Attempt to get from cache - Firestore's persistence handles this automatically if enabled
+            try {
+                const querySnapshot = await getDocs(trendsQuery); // Try again, might get from cache
+                const trends: Trend[] = [];
+                 querySnapshot.forEach((docSnap) => {
+                     const data = docSnap.data();
+                     if (!data.title || !data.url || !data.platform || !data.discoveredAt) {
+                        console.warn(`DashboardPage: Skipping trend (from cache) with missing essential data (ID: ${docSnap.id}):`, data);
+                        return;
+                     }
+                     trends.push({
+                        id: docSnap.id, title: data.title, platform: data.platform, views: data.views, likes: data.likes,
+                        category: data.category || 'Uncategorized', url: data.url, description: data.description,
+                        discoveredAt: (data.discoveredAt as Timestamp)?.toDate() || new Date(0),
+                        processedAt: (data.processedAt as Timestamp)?.toDate(), categoryConfidence: data.categoryConfidence,
+                    });
+                 });
+                 console.log(`DashboardPage: Fetched ${trends.length} trends from Firestore cache (offline).`);
+                 return trends; // Return cached trends if available
+            } catch (cacheError) {
+                 console.error("DashboardPage: Error fetching trends from cache:", cacheError);
+                 throw new Error("Could not load trends. You appear to be offline.");
+            }
         }
         throw error; // Re-throw other errors
     }
@@ -196,9 +240,13 @@ export default function DashboardPage() {
 
       const loadTrends = async () => {
             setLoadingTrends(true);
-            setError(null); // Clear previous trend-specific errors
-            setIsOfflineError(false);
+            // Don't clear user-related errors here, only trend errors
+            // setError(null); // Clear previous trend-specific errors
+            if (!isOfflineError) setError(null); // Clear non-offline errors
+            // Reset specific error flags
             setIsIndexError(false);
+            // Keep isOfflineError if it was set during user data fetch
+
             try {
               const nicheTrends = await fetchTrendsFromFirestore(nicheToFetch, 5); // Fetch top 5
 
@@ -211,15 +259,13 @@ export default function DashboardPage() {
 
               setTrends(trendsWithSaveStatus);
               console.log("DashboardPage: Trends loaded and processed successfully.");
-              // Clear general error if trends load successfully, but keep offline notice if present
-              // if (!isOfflineError) setError(null); // This might clear user data load errors, be cautious
 
             } catch (err: any) {
               console.error("DashboardPage: Error fetching or processing trends:", err);
               const errorMessage = err.message || "Could not load trends. Please try again later.";
-              setError(errorMessage);
+              setError(errorMessage); // Set or update error state
               if (errorMessage.includes("offline")) {
-                  setIsOfflineError(true);
+                  setIsOfflineError(true); // Ensure offline state is set if trend fetch fails offline
               } else if (errorMessage.includes("index required") || errorMessage.includes("index is missing")) {
                   setIsIndexError(true);
               }
@@ -337,7 +383,7 @@ export default function DashboardPage() {
    }
 
     // Display error if exists (including offline error or index error)
-    if (error && !loadingTrends) { // Show error predominantly if exists after loading attempts
+    if (error && !loadingUser) { // Show error predominantly if exists after user loading attempts
         return ( // --- Error State ---
              <div className="space-y-6">
                  <Alert variant={isOfflineError ? "default" : "destructive"} className={isOfflineError ? "border-yellow-500/50 bg-yellow-50/50 dark:bg-yellow-900/10" : ""}>
@@ -353,6 +399,9 @@ export default function DashboardPage() {
                          )}
                          {isIndexError && (
                            <span className="block mt-1 text-xs">This often means a required Firestore index is missing. Check the browser console logs for details or a link to create it, or contact support.</span>
+                         )}
+                         {isOfflineError && (
+                            <span className="block mt-1 text-xs">Some data might be loaded from the cache, but real-time updates are unavailable. Please check your internet connection.</span>
                          )}
                      </AlertDescription>
                  </Alert>
@@ -375,13 +424,12 @@ export default function DashboardPage() {
         );
     }
 
-     // Ensure userData is available before rendering main content (unless it's just an offline error with cached data)
-     // Check specifically for the user data loading case vs. trend loading case
-     if (!userData && !loadingUser && user && !isOfflineError) {
-        console.warn("DashboardPage: Reached render stage without userData, potentially due to a loading error shown above.");
+     // Case: Loading finished, user logged in, but userData is null (and not an offline error)
+     if (!loadingUser && user && !userData && !isOfflineError) {
+        console.warn("DashboardPage: Render stage reached without userData, but user is logged in and not offline. Error should be displayed above.");
          return (
              <div className="flex items-center justify-center h-64">
-                {/* Error message is already displayed above */}
+                 {/* The primary error message is already shown by the block above */}
                  <p className="text-muted-foreground">User data could not be loaded.</p>
             </div>
          );
@@ -389,8 +437,8 @@ export default function DashboardPage() {
 
 
   // --- Main Dashboard Content ---
-  // Only render if userData is available OR if it's an offline error (where cached data might be used implicitly)
-  if (userData || isOfflineError) {
+  // Render only if userData is available (even if potentially cached/offline)
+  if (userData) {
       return (
         <div className="space-y-6">
           {/* Welcome Card */}
@@ -408,7 +456,7 @@ export default function DashboardPage() {
               ) : (
                  <p className="text-muted-foreground">No niche selected. <Link href="/dashboard/settings" className="text-accent hover:underline">Go to settings to add one.</Link></p>
               )}
-               {!isPaidUser && !isOfflineError && ( // Upgrade prompt
+               {!isPaidUser && !isOfflineError && ( // Upgrade prompt - Hide if offline
                   <Alert className="mt-4 bg-accent/10 border-accent/30 text-accent-foreground">
                      <Rocket className="h-4 w-4 !text-accent" />
                      <AlertTitle className="text-accent">Go Premium!</AlertTitle>
@@ -503,10 +551,11 @@ export default function DashboardPage() {
         </div>
       );
   } else {
-      // Render loading or empty state if userData isn't ready and not offline
+      // Fallback Render: Loading state or message if userData isn't ready and not offline
         return (
             <div className="flex items-center justify-center h-64">
                 <p className="text-muted-foreground">Loading dashboard...</p>
+                {/* Error message would have been displayed above if it occurred */}
             </div>
         );
   }

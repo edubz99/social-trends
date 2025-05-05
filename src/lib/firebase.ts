@@ -7,10 +7,13 @@ import {
   initializeFirestore,
   persistentLocalCache,
   CACHE_SIZE_UNLIMITED,
+  FirestoreError,
+  connectFirestoreEmulator, // Import for emulator connection
+  enableNetwork, disableNetwork
 } from "firebase/firestore";
-import { getStorage, FirebaseStorage } from "firebase/storage";
-// Temporarily comment out App Check for debugging
-// import { initializeAppCheck, ReCaptchaV3Provider } from "firebase/app-check";
+import { getStorage, FirebaseStorage, connectStorageEmulator } from "firebase/storage";
+import { getAuth as getFirebaseAuth, connectAuthEmulator } from "firebase/auth";
+
 
 // Ensure environment variables are being read correctly.
 // Check for NEXT_PUBLIC_ prefix for client-side exposure.
@@ -18,15 +21,10 @@ const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
   projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  // Corrected storage bucket format (usually project-id.appspot.com)
-  storageBucket:
-    process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET ||
-    (process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID
-      ? `${process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID}.appspot.com`
-      : undefined),
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID, // Added measurementId
+  measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
 };
 
 // Initialize Firebase App
@@ -37,49 +35,39 @@ let storage: FirebaseStorage;
 
 // Flag to check if Firebase was initialized successfully
 let firebaseInitialized = false;
+const isEmulator = process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATOR === 'true';
 
 // This console log helps verify environment variables are loaded on the client
-// Only log on client-side where process.env is populated by Next.js
 if (typeof window !== "undefined") {
   console.log("Firebase Config Used:", {
-    apiKey: firebaseConfig.apiKey ? "********" : "MISSING/INVALID", // Don't log the actual key, check validity broadly
+    apiKey: firebaseConfig.apiKey ? "********" : "MISSING/INVALID",
     authDomain: firebaseConfig.authDomain || "MISSING/INVALID",
     projectId: firebaseConfig.projectId || "MISSING/INVALID",
-    storageBucket: firebaseConfig.storageBucket || "MISSING/DERIVED/INVALID",
+    storageBucket: firebaseConfig.storageBucket || "MISSING/INVALID",
     messagingSenderId: firebaseConfig.messagingSenderId || "MISSING/INVALID",
     appId: firebaseConfig.appId || "MISSING/INVALID",
     measurementId: firebaseConfig.measurementId || "MISSING/OPTIONAL",
+    useEmulator: isEmulator,
   });
 }
 
 if (typeof window !== "undefined") {
-  // Ensure this runs only on the client
-  // Validate Firebase config more explicitly
+  // Client-side initialization
   const missingVars = Object.entries(firebaseConfig)
     .filter(
       ([key, value]) =>
-        // Allow measurementId to be optional
-        key !== "measurementId" &&
-        // Check for undefined/null/empty string or common placeholder patterns
-        (!value ||
-          value.startsWith("YOUR_") ||
-          value.startsWith("PLACEHOLDER_") ||
-          (key === "apiKey" && !value.startsWith("AIza"))) // Basic check for API key format
+        key !== "measurementId" && // Allow measurementId to be optional
+        (!value || value.includes("YOUR_") || value.includes("PLACEHOLDER_")) &&
+        // Basic check for API key format if it's missing/placeholder
+        !(key === "apiKey" && value && value.startsWith("AIza"))
     )
-    .map(
-      ([key]) =>
-        `NEXT_PUBLIC_FIREBASE_${key.replace(/([A-Z])/g, "_$1").toUpperCase()}`
-    ); // Format key name like NEXT_PUBLIC_FIREBASE_API_KEY
+    .map(([key]) => `NEXT_PUBLIC_FIREBASE_${key.replace(/([A-Z])/g, "_$1").toUpperCase()}`);
 
   if (missingVars.length > 0) {
     console.error(
-      `Firebase configuration is incomplete or uses placeholder/example values. Missing or invalid environment variables: ${missingVars.join(
-        ", "
-      )}. ` +
-        "Please check your .env file and ensure all NEXT_PUBLIC_FIREBASE_* variables are set correctly with your project credentials. " +
-        "You can find these in your Firebase project settings (Project settings > General > Your apps > Firebase SDK snippet > Config)."
+      `Firebase configuration is incomplete or uses placeholder/example values. Missing or invalid environment variables: ${missingVars.join(', ')}. ` +
+      'Please check your .env file or environment settings.'
     );
-    // Set dummy objects to prevent hard crashes, but Firebase will not work
     app = {} as FirebaseApp;
     auth = {} as Auth;
     db = {} as Firestore;
@@ -90,76 +78,79 @@ if (typeof window !== "undefined") {
       if (!getApps().length) {
         app = initializeApp(firebaseConfig);
         console.log("Firebase initialized successfully.");
-
-        // Temporarily disable App Check for debugging
-        /*
-        if (process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY) {
-          const appCheck = initializeAppCheck(app, {
-            provider: new ReCaptchaV3Provider(
-              process.env.NEXT_PUBLIC_RECAPTCHA_SITE_KEY
-            ),
-            isTokenAutoRefreshEnabled: true,
-          });
-          console.log("Firebase App Check initialized with reCAPTCHA v3");
-        } else {
-          console.warn(
-            "NEXT_PUBLIC_RECAPTCHA_SITE_KEY is not set. App Check will not be initialized."
-          );
-        }
-        */
-
-        // Initialize services after ensuring app exists
-        console.log("Attempting to get Auth instance for app:", app);
-        auth = getAuth(app);
-        console.log("Auth instance created:", auth);
-
-        // Initialize Firestore with persistence
-        try {
-          db = initializeFirestore(app, {
-            ignoreUndefinedProperties: true,
-            localCache: persistentLocalCache({
-              cacheSizeBytes: CACHE_SIZE_UNLIMITED,
-            }),
-          });
-          console.log("Firestore initialized with persistence");
-        } catch (firestoreError) {
-          console.error(
-            "Error initializing Firestore with persistence:",
-            firestoreError
-          );
-          db = getFirestore(app);
-          console.log("Firestore initialized without persistence");
-        }
-
-        storage = getStorage(app);
-        firebaseInitialized = true;
-        console.log("All Firebase services initialized successfully");
       } else {
         app = getApp();
         console.log("Using existing Firebase app instance");
       }
 
-      // Add a specific check/warning for auth/configuration-not-found
-      console.warn(
-        "Firebase Initialized: If you encounter 'auth/configuration-not-found' errors, " +
-          "ensure you have enabled the necessary sign-in methods (e.g., Email/Password, Google) " +
-          "in your Firebase project console (Authentication > Sign-in method)."
+      // Get Auth instance
+      auth = getFirebaseAuth(app); // Use getAuth from 'firebase/auth'
+
+      // Initialize Firestore with persistence
+      try {
+        db = initializeFirestore(app, {
+          ignoreUndefinedProperties: true,
+          localCache: persistentLocalCache({ cacheSizeBytes: CACHE_SIZE_UNLIMITED }),
+        });
+        console.log("Firestore initialized with persistence enabled.");
+        // Attempt to enable network explicitly after initialization to handle potential offline start
+        enableNetwork(db).then(() => {
+            console.log("Firestore network connection explicitly enabled.");
+        }).catch((err) => {
+             if (err instanceof FirestoreError && err.code === 'failed-precondition') {
+                console.warn("Firestore: Could not enable network, possibly already enabled or another tab has persistence.");
+            } else if (err instanceof FirestoreError && err.code === 'unimplemented') {
+                 console.warn("Firestore: Persistent cache not available in this environment (e.g., server-side rendering). Offline support limited.");
+            } else {
+                console.error("Firestore: Error enabling network:", err);
+            }
+        });
+
+      } catch (firestoreError: any) {
+        console.error("Error initializing Firestore with persistence:", firestoreError);
+        // Fallback to default initialization if persistence fails
+        db = getFirestore(app);
+        console.warn("Firestore initialized WITHOUT persistence due to error.");
+      }
+
+      // Get Storage instance
+      storage = getStorage(app);
+
+      // Connect to emulators if configured
+      if (isEmulator) {
+        console.log("Connecting to Firebase Emulators...");
+        try {
+            // Default ports: Auth 9099, Firestore 8080, Storage 9199
+            connectAuthEmulator(auth, "http://localhost:9099", { disableWarnings: true });
+            connectFirestoreEmulator(db, 'localhost', 8080);
+            connectStorageEmulator(storage, 'localhost', 9199);
+            console.log("Connected to Firebase Emulators (Auth:9099, Firestore:8080, Storage:9199)");
+        } catch (emulatorError) {
+             console.error("Error connecting to Firebase Emulators:", emulatorError);
+             console.warn("Ensure Firebase Emulators are running. Run 'firebase emulators:start'.");
+        }
+      }
+
+      firebaseInitialized = true;
+      console.log("All Firebase services initialized for client.");
+
+      // Add configuration warnings
+       console.warn(
+        "Firebase Auth Check: If you see 'auth/configuration-not-found', ensure Email/Password & Google sign-in methods are enabled in Firebase Console > Authentication > Sign-in method."
+      );
+       console.warn(
+        "Firebase Auth Check: If you see 'auth/unauthorized-domain', ensure your domain (e.g., localhost:xxxx, socialhacks.app) is added in Firebase Console > Authentication > Settings > Authorized domains."
+      );
+       console.warn(
+        "Firestore Rules Check: If you see Firestore permission errors (PERMISSION_DENIED or 400 Bad Request on Listen), verify your Firestore Security Rules allow reads/writes for logged-in users (e.g., /users/{userId})."
       );
 
-      // Add warning for unauthorized domains
-      console.warn(
-        "Firebase Auth: If you encounter 'auth/unauthorized-domain' errors, ensure the current domain (e.g., localhost:xxxx, your deployed domain) is listed in the 'Authorized domains' " +
-          "section under Firebase Console > Authentication > Settings."
-      );
 
-      // Add warning for Firestore Permission errors (often 400 Bad Request on Listen)
-      console.warn(
-        "Firestore: If you see 400 Bad Request errors on network requests to 'firestore.googleapis.com/.../Listen/channel' or 'PERMISSION_DENIED' errors in the console, " +
-          "check your Firestore Security Rules in the Firebase Console. Ensure the rules allow the logged-in user to read the necessary documents (e.g., '/users/{userId}')."
-      );
-    } catch (error) {
-      console.error("Error during Firebase initialization:", error);
-      // Set dummy objects to prevent crashes
+    } catch (error: any) {
+      console.error("CRITICAL Error during Firebase initialization:", error);
+      if (error.message?.includes('invalid-api-key')) {
+        console.error("Specific Error: Invalid API Key. Double-check NEXT_PUBLIC_FIREBASE_API_KEY.");
+      }
       app = {} as FirebaseApp;
       auth = {} as Auth;
       db = {} as Firestore;
@@ -170,16 +161,16 @@ if (typeof window !== "undefined") {
 
   if (!firebaseInitialized) {
     console.warn(
-      "Firebase is not properly initialized. App functionality requiring Firebase (Auth, Firestore, Storage) will not work. Check console errors for details on missing/invalid configuration."
+      "Firebase initialization FAILED. App functionality requiring Firebase will not work. Check console errors."
     );
-    // Ensure dummies are assigned if not initialized
+    // Ensure dummies are assigned if initialization failed
     auth = auth || ({} as Auth);
     db = db || ({} as Firestore);
     storage = storage || ({} as FirebaseStorage);
   }
 } else {
-  // Server-side: Provide dummies as client-side Firebase is expected for this setup.
-  // Note: If using server-side Firebase Admin SDK, initialize it separately.
+  // Server-side: Firebase client SDK not initialized here.
+  // If needed, use Firebase Admin SDK separately in server components/functions.
   app = {} as FirebaseApp;
   auth = {} as Auth;
   db = {} as Firestore;

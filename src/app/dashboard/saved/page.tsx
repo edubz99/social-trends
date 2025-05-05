@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useState } from 'react';
@@ -6,7 +5,7 @@ import { useEffect, useState } from 'react';
 import {
     doc, getDoc, updateDoc, arrayRemove,
     collection, query, where, getDocs, documentId,
-    Timestamp, FirestoreError
+    Timestamp, FirestoreError, enableNetwork // Import enableNetwork
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useAuth } from '@/components/providers/auth-provider';
@@ -36,23 +35,57 @@ interface Trend {
 
 // Fetch user data including saved trend IDs
 async function fetchUserDataWithSaved(uid: string) {
+    console.log("SavedTrendsPage: Fetching user data...");
     const userDocRef = doc(db, "users", uid);
-    const userDocSnap = await getDoc(userDocRef);
-    if (userDocSnap.exists()) {
-        const data = userDocSnap.data();
-        return {
-            uid: data.uid,
-            savedTrendIds: data.savedTrendIds || [],
-            subscription: data.subscription || { plan: 'free', status: 'active' },
-        };
-    } else {
-        return null;
+    try {
+        // Explicitly try to enable network before fetching user data
+        await enableNetwork(db);
+         console.log("SavedTrendsPage: Network enabled for fetching user data.");
+        const userDocSnap = await getDoc(userDocRef);
+        if (userDocSnap.exists()) {
+            const data = userDocSnap.data();
+            return {
+                uid: data.uid,
+                savedTrendIds: data.savedTrendIds || [],
+                subscription: data.subscription || { plan: 'free', status: 'active' },
+                 isOffline: false // Explicitly online
+            };
+        } else {
+             console.warn(`SavedTrendsPage: No user document found for UID: ${uid}`);
+            return null;
+        }
+    } catch (error) {
+         console.error("SavedTrendsPage: Error fetching user data:", error);
+         if (error instanceof FirestoreError && (error.code === 'unavailable' || error.message.includes('offline'))) {
+             console.warn("SavedTrendsPage: Firestore appears to be offline trying to fetch user data.");
+              // Attempt to get from cache
+             try {
+                 const userDocSnap = await getDoc(userDocRef); // Try again, might get from cache
+                  if (userDocSnap.exists()) {
+                     const data = userDocSnap.data();
+                     console.log("SavedTrendsPage: User document found in cache (offline).");
+                     return {
+                        uid: data.uid,
+                        savedTrendIds: data.savedTrendIds || [],
+                        subscription: data.subscription || { plan: 'free', status: 'active' },
+                        isOffline: true // Mark as offline
+                    };
+                 } else {
+                      console.error("SavedTrendsPage: User document not found, even in cache (offline).");
+                      throw new Error("Could not load user data. You appear to be offline and no cached data is available.");
+                  }
+             } catch (cacheError) {
+                  console.error("SavedTrendsPage: Error fetching user data from cache:", cacheError);
+                  throw new Error("Could not load user data. You appear to be offline.");
+             }
+         }
+         throw error; // Rethrow other errors
     }
 }
 
 // Fetch trend details from Firestore based on a list of IDs
 async function fetchTrendsByIdsFromFirestore(ids: string[]): Promise<Trend[]> {
-    console.log(`Fetching ${ids.length} trends by IDs from Firestore...`);
+    console.log(`SavedTrendsPage: Fetching ${ids.length} trends by IDs from Firestore...`);
     if (ids.length === 0) return [];
 
     const trendsCollection = collection(db, 'trends');
@@ -67,6 +100,9 @@ async function fetchTrendsByIdsFromFirestore(ids: string[]): Promise<Trend[]> {
         const trendsQuery = query(trendsCollection, where(documentId(), 'in', batchIds));
 
         try {
+             // Explicitly try to enable network before fetching trends
+            await enableNetwork(db);
+             console.log("SavedTrendsPage: Network enabled for fetching trend batch.");
             const querySnapshot = await getDocs(trendsQuery);
             querySnapshot.forEach((docSnap) => {
                 const data = docSnap.data();
@@ -86,15 +122,38 @@ async function fetchTrendsByIdsFromFirestore(ids: string[]): Promise<Trend[]> {
                 });
             });
         } catch (error) {
-            console.error(`Error fetching batch of trends (${batchIds.join(', ')}):`, error);
+            console.error(`SavedTrendsPage: Error fetching batch of trends (${batchIds.join(', ')}):`, error);
             if (error instanceof FirestoreError && error.code === 'failed-precondition') {
-                 console.error("Firestore query failed: Missing index. Check Firestore console 'Indexes' tab.");
+                 console.error("SavedTrendsPage: Firestore query failed: Missing index. Check Firestore console 'Indexes' tab.");
                  throw new Error("Database query error: Index required. Please check logs or contact support.");
+            } else if (error instanceof FirestoreError && (error.code === 'unavailable' || error.message.includes('offline'))) {
+                console.warn("SavedTrendsPage: Firestore query failed for trends batch: Client appears to be offline.");
+                // Attempt to get from cache
+                try {
+                    const querySnapshot = await getDocs(trendsQuery); // Try again, might get from cache
+                    querySnapshot.forEach((docSnap) => {
+                        const data = docSnap.data();
+                         trends.push({
+                             id: docSnap.id, title: data.title, platform: data.platform, views: data.views, likes: data.likes,
+                             category: data.category, url: data.url, description: data.description,
+                             discoveredAt: (data.discoveredAt as Timestamp)?.toDate() || new Date(0),
+                             processedAt: (data.processedAt as Timestamp)?.toDate(), categoryConfidence: data.categoryConfidence,
+                             saved: true,
+                         });
+                    });
+                     console.log(`SavedTrendsPage: Successfully fetched ${querySnapshot.size} trends for this batch from cache (offline).`);
+                    // Continue to next batch if any
+                } catch (cacheError) {
+                     console.error("SavedTrendsPage: Error fetching trends batch from cache:", cacheError);
+                     throw new Error("Could not load saved trends. You appear to be offline.");
+                }
             }
-            throw error; // Re-throw other errors
+             else {
+                throw error; // Re-throw other errors
+            }
         }
     }
-     console.log(`Successfully fetched details for ${trends.length} trends.`);
+     console.log(`SavedTrendsPage: Finished fetching details for ${trends.length} trends.`);
     return trends;
 }
 
@@ -117,6 +176,12 @@ export default function SavedTrendsPage() {
           const fetchedUserData = await fetchUserDataWithSaved(user.uid);
           setUserData(fetchedUserData);
 
+           if (fetchedUserData?.isOffline) {
+                setIsOfflineError(true);
+                setError("Could not load fresh data. You appear to be offline."); // Set initial error state
+            }
+
+
           if (!fetchedUserData) {
               setError("User profile not found.");
               setLoading(false);
@@ -135,17 +200,26 @@ export default function SavedTrendsPage() {
               // Sort by processed date, newest first (optional, depends on desired order)
              fetchedTrends.sort((a, b) => (b.processedAt?.getTime() || 0) - (a.processedAt?.getTime() || 0));
              setSavedTrends(fetchedTrends);
+               // If trend fetch succeeds after user fetch was offline, clear offline error
+              if (isOfflineError) {
+                  setIsOfflineError(false);
+                  setError(null);
+              }
           } else {
              setSavedTrends([]); // No trends saved
+              // Also clear offline error if no trends needed fetching
+              if (isOfflineError) {
+                  setIsOfflineError(false);
+                  setError(null);
+              }
           }
 
         } catch (err: any) {
-          console.error("Error loading saved trends:", err);
-           if (err instanceof FirestoreError && (err.code === 'unavailable' || err.message.includes('offline'))) {
-                setError("Could not load saved trends. You appear to be offline.");
-                setIsOfflineError(true);
-            } else {
-                setError(err.message || "Could not load saved trends. Please try again later.");
+          console.error("SavedTrendsPage: Error loading saved trends:", err);
+           const errorMessage = err.message || "Could not load saved trends. Please try again later.";
+           setError(errorMessage);
+           if (errorMessage.includes("offline")) {
+                setIsOfflineError(true); // Ensure offline state is set
             }
         } finally {
           setLoading(false);
@@ -156,10 +230,13 @@ export default function SavedTrendsPage() {
         setLoading(false);
         setError("Please log in to view your saved trends.");
     }
-  }, [user]);
+  }, [user]); // Removed isOfflineError from dependency array here to prevent re-fetch loop on error
 
   const handleUnsaveTrend = async (trendId: string) => {
-     if (!user || !userData) return;
+     if (!user || !userData || isOfflineError) { // Prevent unsaving if offline
+         if(isOfflineError) alert("Cannot unsave trends while offline.");
+         return;
+     }
 
      // Optimistic UI update
      const originalTrends = [...savedTrends];
@@ -168,6 +245,7 @@ export default function SavedTrendsPage() {
      setUserData(prevUserData => ({
         ...prevUserData!,
         savedTrendIds: (prevUserData?.savedTrendIds || []).filter(id => id !== trendId),
+         isOffline: prevUserData?.isOffline || false // Preserve offline status
     }));
 
 
@@ -176,14 +254,15 @@ export default function SavedTrendsPage() {
         await updateDoc(userDocRef, {
             savedTrendIds: arrayRemove(trendId)
         });
-        console.log(`Trend ${trendId} unsaved successfully.`);
+        console.log(`SavedTrendsPage: Trend ${trendId} unsaved successfully in Firestore.`);
      } catch (error) {
-        console.error("Failed to unsave trend:", error);
+        console.error("SavedTrendsPage: Failed to unsave trend in Firestore:", error);
          // Revert optimistic updates
         setSavedTrends(originalTrends);
         setUserData(prevUserData => ({
             ...prevUserData!,
             savedTrendIds: [...(prevUserData?.savedTrendIds || []), trendId], // Add back
+            isOffline: prevUserData?.isOffline || false // Preserve offline status
         }));
         alert(`Failed to unsave trend. Please try again.`);
      }
@@ -232,10 +311,15 @@ export default function SavedTrendsPage() {
 
   if (error) { // Show general or offline error
       return (
-           <Alert variant="destructive" className="mt-4">
-              {isOfflineError && <WifiOff className="h-4 w-4" />}
+           <Alert variant={isOfflineError ? "default" : "destructive"} className={isOfflineError ? "border-yellow-500/50 bg-yellow-50/50 dark:bg-yellow-900/10" : ""}>
+              {isOfflineError && <WifiOff className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />}
               <AlertTitle>{isOfflineError ? "Offline" : "Error"}</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
+              <AlertDescription>
+                {error}
+                {isOfflineError && (
+                   <span className="block mt-1 text-xs">Displaying cached data where possible. Real-time updates are unavailable. Check your connection.</span>
+                 )}
+              </AlertDescription>
            </Alert>
       );
   }
@@ -283,6 +367,7 @@ export default function SavedTrendsPage() {
                     onClick={() => handleUnsaveTrend(trend.id)}
                     aria-label="Unsave trend"
                     disabled={isOfflineError} // Disable if offline
+                     title={isOfflineError ? "Cannot unsave while offline" : "Unsave trend"}
                   >
                     <Trash2 className="h-5 w-5" />
                   </Button>
