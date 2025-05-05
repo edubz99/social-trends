@@ -15,7 +15,7 @@ export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
-  const { toast } = useToast();
+  const { toast } = useToast(); // Use the toast hook inside the component
 
   const handlePasswordReset = async (e: React.FormEvent) => {
     e.preventDefault();

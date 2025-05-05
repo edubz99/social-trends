@@ -203,7 +203,7 @@ const DATE_RANGE_OPTIONS = [
 
 export default function ForecastsPage() {
   const { user } = useAuth();
-  const { toast } = useToast(); // Use the toast hook
+  const { toast } = useToast(); // Use the toast hook inside the component
   const [userData, setUserData] = useState<UserData | null>(null);
   const [displayedForecasts, setDisplayedForecasts] = useState<WeeklyForecast[]>([]);
   const [loadingUser, setLoadingUser] = useState(true);

@@ -43,7 +43,7 @@ interface UserSettings {
 
 export default function SettingsPage() {
   const { user } = useAuth();
-  const { toast } = useToast();
+  const { toast } = useToast(); // Use toast hook inside the component
   const [settings, setSettings] = useState<Partial<UserSettings>>({});
   const [initialSettings, setInitialSettings] = useState<Partial<UserSettings>>({}); // To track changes
   const [loading, setLoading] = useState(true);

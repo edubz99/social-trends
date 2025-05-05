@@ -28,7 +28,7 @@ export default function SignupPage() {
   const [primaryNiche, setPrimaryNiche] = useState('');
   const [loading, setLoading] = useState(false);
   const router = useRouter();
-  const { toast } = useToast();
+  const { toast } = useToast(); // Use the toast hook inside the component
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();

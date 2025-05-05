@@ -165,7 +165,7 @@ async function fetchSavedItemDetails(itemIds: string[]): Promise<SavedForecastIt
 
 export default function SavedForecastsPage() {
   const { user } = useAuth();
-  const { toast } = useToast(); // Use toast hook
+  const { toast } = useToast(); // Use toast hook inside the component
   const [userData, setUserData] = useState<UserData | null>(null);
   const [savedItems, setSavedItems] = useState<SavedForecastItem[]>([]);
   const [loading, setLoading] = useState(true);

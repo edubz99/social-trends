@@ -16,6 +16,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Rocket, Bookmark, Settings, WifiOff, HelpCircle, BarChart, BrainCircuit } from 'lucide-react'; // Updated icons
 import Link from 'next/link';
 import { formatDistanceToNow } from 'date-fns'; // Import date formatting
+import { useToast } from '@/hooks/use-toast'; // Import useToast
 
 // --- Data Structures ---
 
@@ -215,6 +216,7 @@ async function fetchLatestForecastForNiche(niche: string): Promise<WeeklyForecas
 
 export default function DashboardPage() {
   const { user } = useAuth();
+  const { toast } = useToast(); // Call useToast inside the component body
   const [userData, setUserData] = useState<UserData | null>(null);
   const [latestForecast, setLatestForecast] = useState<WeeklyForecast | null>(null);
   const [loadingUser, setLoadingUser] = useState(true);
@@ -659,7 +661,3 @@ export default function DashboardPage() {
         );
   }
 }
-
-// Added useToast import
-import { useToast } from '@/hooks/use-toast';
-const { toast } = useToast(); // Call useToast at the top level
