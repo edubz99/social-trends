@@ -4,20 +4,40 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Allow logged-in users to read trends data
-    match /trends/{trendId} {
-      allow read: if request.auth != null;
-      allow write: if false; // Only backend functions should write trends
-    }
-
-    // Allow users to read and write their own user document
+    // Users Collection:
+    // - Authenticated users can read their own profile.
+    // - Authenticated users can update their own profile (specific fields allowed).
+    // - Creation happens during signup (handled by backend/auth trigger potentially).
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read: if request.auth != null && request.auth.uid == userId;
+      // Allow updating specific fields like displayName, selectedNiches, notifications, primaryNiche
+      // Disallow updating subscription directly (should be handled by backend/Stripe webhook)
+      allow update: if request.auth != null && request.auth.uid == userId
+                    && request.resource.data.keys().hasOnly(['displayName', 'selectedNiches', 'notifications', 'primaryNiche', 'savedForecastItemIds', 'stripeCustomerId', 'stripeSubscriptionId']); // Allow saving forecast IDs and Stripe info
+      // Allow creating their own user doc (e.g., during signup)
+      allow create: if request.auth != null && request.auth.uid == userId;
+      // Deny delete for safety
+      allow delete: if false;
     }
 
-    // Deny all other writes by default
-    match /{document=**} {
-      allow read, write: if false;
+    // Forecasts Collection:
+    // - Authenticated users can read forecasts.
+    // - Only backend/admin should write forecasts.
+    match /forecasts/{forecastId} {
+      allow read: if request.auth != null;
+      allow write: if false; // Only allow writes from backend (e.g., scheduled function with admin privileges)
+      // More granular write rules could be added if admin SDK access isn't used, e.g., check custom claims.
     }
+
+    // Trends Collection (Now potentially legacy or used differently):
+    // - Reads might still be needed for specific features? Restrict if unused.
+    // - Writes should definitely be restricted to backend/functions.
+    match /trends/{trendId} {
+       allow read: if request.auth != null; // Allow reads for now, restrict if unused by frontend
+       allow write: if false; // Disallow client-side writes
+    }
+
+    // Add rules for other collections if they exist (e.g., admin logs, config)
+
   }
 }

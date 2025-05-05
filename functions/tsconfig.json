@@ -1,3 +1,4 @@
+
 {
   "compilerOptions": {
     "module": "commonjs",
@@ -12,12 +13,14 @@
     "forceConsistentCasingInFileNames": true,
     "baseUrl": ".", // Allows paths relative to tsconfig
     "paths": {
-      "@/*": ["../src/*"] // Adjust path mapping for functions dir
+      // Ensure this path correctly points to the main src directory
+      // relative to the functions directory
+      "@/*": ["../src/*"]
     }
   },
   "compileOnSave": true,
   "include": [
-    "src"
+    "src/**/*.ts" // Ensure all .ts files in src are included
   ],
   "exclude": [
     "node_modules",

@@ -2,31 +2,33 @@
 {
   "indexes": [
     {
-      "collectionGroup": "trends",
+      "collectionGroup": "forecasts", // New collection for forecasts
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "category", "order": "ASCENDING" },
-        { "fieldPath": "processedAt", "order": "DESCENDING" }
+        { "fieldPath": "niche", "order": "ASCENDING" }, // Or DESCENDING, match query
+        { "fieldPath": "weekStartDate", "order": "DESCENDING" } // For fetching latest per niche
       ]
     },
     {
-      "collectionGroup": "trends",
+      "collectionGroup": "forecasts",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "platform", "order": "ASCENDING" },
-        { "fieldPath": "processedAt", "order": "DESCENDING" }
+        // Index for querying forecasts after a certain date (across all niches if needed)
+        { "fieldPath": "weekStartDate", "order": "DESCENDING" }
       ]
     },
-     {
-      "collectionGroup": "trends",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "category", "order": "ASCENDING" },
-        { "fieldPath": "platform", "order": "ASCENDING" },
-        { "fieldPath": "processedAt", "order": "DESCENDING" }
-      ]
+    {
+        "collectionGroup": "users", // Index for finding users subscribed to a niche
+        "queryScope": "COLLECTION",
+        "fields": [
+            { "fieldPath": "selectedNiches", "arrayConfig": "CONTAINS" },
+            { "fieldPath": "notifications.emailWeeklyForecast", "order": "ASCENDING" } // Match query in function
+        ]
     }
-    // Add more indexes as needed based on filtering combinations in TrendsPage
+    // Remove old 'trends' indexes if no longer needed
+    // {
+    //   "collectionGroup": "trends", ...
+    // }
   ],
   "fieldOverrides": []
 }

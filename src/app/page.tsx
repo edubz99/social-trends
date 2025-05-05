@@ -2,30 +2,30 @@
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
-import { TrendingUp, Zap, Filter, CheckCircle, MonitorSmartphone, AlertTriangle, Bot } from 'lucide-react';
+import { TrendingUp, Zap, Filter, CheckCircle, BrainCircuit, Clock } from 'lucide-react'; // Updated icons
 import Image from 'next/image';
 
 
 const FEATURES = [
  {
-    icon: MonitorSmartphone,
-    title: "AI Trend Monitoring",
-    description: "Our AI constantly scans TikTok, Instagram Reels, and YouTube Shorts to detect emerging trends with viral potential.",
+    icon: BrainCircuit, // Changed icon
+    title: "AI Trend Forecasting",
+    description: "Our AI analyzes historical social media data to predict emerging trends and content formats for the upcoming week.", // Updated description
   },
   {
     icon: Filter,
-    title: "Niche-Specific Relevance",
-    description: "Get trends filtered for your specific content niche, ensuring relevance for your audience.",
+    title: "Niche-Specific Insights",
+    description: "Receive forecasts tailored to your specific content niche, ensuring relevance and actionable ideas.", // Updated description
   },
    {
-    icon: Zap,
-    title: "Early Alerts",
-    description: "Receive daily email summaries (Free) or real-time alerts (Premium) via email & Slack to act fast.",
+    icon: Clock, // Changed icon
+    title: "Weekly Forecasts",
+    description: "Get reliable trend predictions delivered every Monday via email (Free & Premium) or Slack (Premium).", // Updated description
   },
    {
-    icon: Bot,
-    title: "Content Ideas",
-    description: "Leverage AI-powered suggestions (coming soon!) to brainstorm engaging posts based on current trends.",
+    icon: Zap, // Keep Zap for "actionable"
+    title: "Actionable Content Ideas",
+    description: "Forecasts include concrete suggestions for content formats and styles, helping you create timely content.", // Updated description
   },
 ];
 
@@ -34,8 +34,8 @@ const PLANS = {
     name: "Free",
     price: "$0",
     frequency: "/month",
-    description: "Get started with essential trend tracking.",
-    features: ["1 Niche Tracking", "Daily Email Summary", "Limited Trend Alerts"],
+    description: "Get started with essential trend forecasting.",
+    features: ["Select 1 Niche", "Weekly Forecast Email"], // Updated features
     cta: "Sign Up for Free",
     href: "/auth/signup",
     highlight: false,
@@ -44,12 +44,12 @@ const PLANS = {
     name: "Premium",
     price: "$9.99",
     frequency: "/month",
-    description: "Unlock the full power of trend analysis.",
+    description: "Unlock the full power of predictive trend analysis.",
     features: [
-        "Multiple Niche Tracking",
-        "Real-time Email & Slack Alerts",
-        "Save Favorite Trends",
-        "Unlimited Trend History",
+        "Select Multiple Niches", // Updated features
+        "Weekly Email & Slack Alerts",
+        "Save Favorite Forecasts",
+        "Access Forecast History",
         "Priority Support",
     ],
     cta: "Go Premium",
@@ -66,6 +66,7 @@ export default function Home() {
       <header className="container mx-auto px-4 lg:px-6 h-16 flex items-center justify-between">
          <Link href="/" className="flex items-center gap-2 font-bold text-lg text-primary">
              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6 text-accent">
+                {/* Re-using the old logo SVG */}
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-5-8c0-1.1.9-2 2-2h2v6H9v-4H7v4c0 1.1-.9 2-2 2s-2-.9-2-2v-4c0-1.1.9-2 2-2s2 .9 2 2v1zm10 0c0-1.1.9-2 2-2s2 .9 2 2v4c0 1.1-.9 2-2 2s-2-.9-2-2v-4h-2v4h2c1.1 0 2-.9 2-2v-1c0-1.1-.9-2-2-2h-2c-1.1 0-2 .9-2 2v4h-2v-6h4v-1z"/>
              </svg>
              <span>SocialTrendRadar</span>
@@ -86,28 +87,28 @@ export default function Home() {
           <div className="container px-4 md:px-6 text-center">
             <div className="max-w-3xl mx-auto space-y-4">
               <h1 className="text-4xl font-extrabold tracking-tight sm:text-5xl md:text-6xl lg:text-7xl">
-                Stop Guessing, Start Trending.
+                Predict the Next Wave.
               </h1>
               <p className="text-lg text-muted-foreground md:text-xl lg:text-2xl">
-                SocialTrendRadar uses AI to find emerging TikTok, Reels & Shorts trends in <span className="text-accent font-semibold">your niche</span> before they explode. Get daily alerts and create content that goes viral.
+                SocialTrendRadar uses AI to analyze historical data and forecast emerging social media trends for <span className="text-accent font-semibold">your niche</span>. Get weekly predictions, create content that resonates.
               </p>
               <Link href="/auth/signup">
                 <Button size="lg" className="mt-4 bg-accent hover:bg-accent/90 text-accent-foreground text-lg px-8 py-6">
-                  Get Started for Free
+                  Get Weekly Forecasts
                   <TrendingUp className="ml-2 h-5 w-5" />
                 </Button>
               </Link>
-               <p className="text-sm text-muted-foreground mt-2">No credit card required.</p>
+               <p className="text-sm text-muted-foreground mt-2">Start free. No credit card required.</p>
             </div>
               {/* Optional: Placeholder for an image/graphic */}
              <div className="mt-12 flex justify-center">
                  <Image
-                    src="https://picsum.photos/800/400" // Replace with a relevant placeholder or final image
-                    alt="Dashboard preview or abstract graphic"
+                    src="https://picsum.photos/800/400?random=1" // Replace with a relevant placeholder or final image
+                    alt="AI analysis graphic or abstract dashboard"
                     width={800}
                     height={400}
                     className="rounded-lg shadow-xl border"
-                    data-ai-hint="dashboard social media graph"
+                    data-ai-hint="ai data analysis social media forecast" // Updated hint
                  />
              </div>
           </div>
@@ -117,8 +118,8 @@ export default function Home() {
         <section id="features" className="w-full py-12 md:py-24 lg:py-32 bg-background">
           <div className="container px-4 md:px-6">
             <div className="text-center mb-12">
-              <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">How SocialTrendRadar Works</h2>
-              <p className="mt-2 text-lg text-muted-foreground">Catch the wave before it crests.</p>
+              <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">How SocialTrendRadar Helps You</h2>
+              <p className="mt-2 text-lg text-muted-foreground">Stay ahead with AI-powered insights.</p>
             </div>
             <div className="grid grid-cols-1 gap-8 md:grid-cols-2 lg:grid-cols-4">
               {FEATURES.map((feature) => (
@@ -189,6 +190,7 @@ export default function Home() {
         <div className="container px-4 md:px-6 flex flex-col md:flex-row justify-between items-center text-center md:text-left">
            <div className="flex items-center gap-2 mb-4 md:mb-0">
                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-accent">
+                  {/* Re-using the old logo SVG */}
                   <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-5-8c0-1.1.9-2 2-2h2v6H9v-4H7v4c0 1.1-.9 2-2 2s-2-.9-2-2v-4c0-1.1.9-2 2-2s2 .9 2 2v1zm10 0c0-1.1.9-2 2-2s2 .9 2 2v4c0 1.1-.9 2-2 2s-2-.9-2-2v-4h-2v4h2c1.1 0 2-.9 2-2v-1c0-1.1-.9-2-2-2h-2c-1.1 0-2 .9-2 2v4h-2v-6h4v-1z"/>
                </svg>
                <span className="font-semibold">SocialTrendRadar</span>
