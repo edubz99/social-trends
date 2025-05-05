@@ -1,21 +1,18 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from "firebase/app";
-import { getAuth, Auth } from "firebase/auth";
-// Corrected Firestore import for persistence
+import { getAuth, Auth, connectAuthEmulator } from "firebase/auth";
 import {
   getFirestore,
   Firestore,
-  initializeFirestore,
+  initializeFirestore, // Keep for persistence setup
   persistentLocalCache,
   CACHE_SIZE_UNLIMITED,
   FirestoreError,
-  connectFirestoreEmulator, // Import for emulator connection
+  connectFirestoreEmulator,
   enableNetwork,
-  disableNetwork, // Added disableNetwork
-  terminate, // Added terminate for potential cleanup
-  clearIndexedDbPersistence, // Added for debugging persistence issues
+  terminate, // Keep terminate, might be useful for cleanup if needed, but avoid using it generally
+  // No need for disableNetwork or clearIndexedDbPersistence generally
 } from "firebase/firestore";
 import { getStorage, FirebaseStorage, connectStorageEmulator } from "firebase/storage";
-import { getAuth as getFirebaseAuth, connectAuthEmulator } from "firebase/auth";
 
 
 // Ensure environment variables are being read correctly.
@@ -79,90 +76,76 @@ if (typeof window !== "undefined") {
   } else {
     try {
       if (!getApps().length) {
+        // Initialize App and Services ONLY ONCE
         app = initializeApp(firebaseConfig);
         console.log("[Firebase] App initialized successfully.");
-      } else {
-        app = getApp();
-        console.log("[Firebase] Using existing Firebase app instance");
-      }
 
-      // Get Auth instance
-      auth = getFirebaseAuth(app); // Use getAuth from 'firebase/auth'
+        auth = getAuth(app);
+        storage = getStorage(app);
 
-      // Initialize Firestore with persistence
-      try {
-        // Check if Firestore instance already exists for this app
-        // Note: getFirestore() without args might cause issues if multiple apps exist
         try {
+          // Initialize Firestore WITH persistence settings ONLY when the app is first created
+          db = initializeFirestore(app, {
+              localCache: persistentLocalCache({ cacheSizeBytes: CACHE_SIZE_UNLIMITED }),
+              ignoreUndefinedProperties: true,
+          });
+          console.log("[Firebase] Firestore initialized with persistence.");
+
+          // Attempt to enable network after initialization
+          enableNetwork(db).then(() => {
+              console.log("[Firebase] Firestore network explicitly enabled.");
+          }).catch((err) => {
+                if (err instanceof FirestoreError && err.code === 'failed-precondition') {
+                  console.warn("[Firebase] Firestore: Network already enabled or persistence failed in another tab.");
+                } else if (err instanceof FirestoreError && err.code === 'unimplemented') {
+                    console.warn("[Firebase] Firestore: Persistent cache not available in this environment (e.g., server-side rendering). Offline support limited.");
+                } else {
+                  console.error("[Firebase] Firestore: Error enabling network:", err);
+                }
+          });
+
+        } catch (firestoreError: any) {
+            console.error("[Firebase] Error initializing Firestore with persistence:", firestoreError);
+            // Fallback: get default instance without explicit persistence settings
             db = getFirestore(app);
-            // Terminate existing instance if needed, especially for re-init with persistence
-            // await terminate(db);
-            // console.log("[Firebase] Terminated existing Firestore instance before re-initializing with persistence.");
-            console.log("[Firebase] Using existing Firestore instance.");
-        } catch (e) {
-            console.log("[Firebase] No existing Firestore instance found, initializing new one.");
+            console.warn("[Firebase] Firestore initialized WITHOUT explicit persistence settings due to error.");
         }
 
-        // Initialize with persistence settings
-        // Use initializeFirestore ONLY if you need specific settings like persistence.
-        // If just getting the default instance, getFirestore(app) is enough.
-        // Let's assume persistence is desired:
-        db = initializeFirestore(app, {
-          ignoreUndefinedProperties: true,
-          localCache: persistentLocalCache({ cacheSizeBytes: CACHE_SIZE_UNLIMITED }),
-          // experimentalAutoDetectLongPolling: true, // Optional: May help in some network environments
-        });
-        console.log("[Firebase] Firestore initialized with persistent cache settings.");
-
-        // Attempt to enable network explicitly after initialization to handle potential offline start
-        enableNetwork(db).then(() => {
-            console.log("[Firebase] Firestore network connection explicitly enabled.");
-        }).catch((err) => {
-             if (err instanceof FirestoreError && err.code === 'failed-precondition') {
-                console.warn("[Firebase] Firestore: Could not enable network, possibly already enabled or another tab has persistence.");
-            } else if (err instanceof FirestoreError && err.code === 'unimplemented') {
-                 console.warn("[Firebase] Firestore: Persistent cache not available in this environment (e.g., server-side rendering). Offline support limited.");
-            } else {
-                console.error("[Firebase] Firestore: Error enabling network:", err);
+        // Connect to emulators if configured (do this after service init)
+        if (isEmulator) {
+            console.log("[Firebase] Connecting to Emulators...");
+            try {
+                connectAuthEmulator(auth, "http://localhost:9099", { disableWarnings: true });
+                connectFirestoreEmulator(db, 'localhost', 8080);
+                connectStorageEmulator(storage, 'localhost', 9199);
+                console.log("[Firebase] Connected to Emulators (Auth:9099, Firestore:8080, Storage:9199).");
+            } catch (emulatorError) {
+                console.error("[Firebase] Error connecting to emulators:", emulatorError);
+                console.warn("[Firebase] Ensure Firebase Emulators are running. Run 'firebase emulators:start'.");
             }
+        }
+
+      } else {
+        // App already initialized, get existing instances
+        app = getApp();
+        auth = getAuth(app);
+        storage = getStorage(app);
+        // Get the already initialized Firestore instance (should retain persistence settings from initial call)
+        db = getFirestore(app);
+        console.log("[Firebase] Using existing Firebase app and service instances.");
+
+        // Re-check network status when retrieving existing instance
+        enableNetwork(db).catch((err) => {
+             if (err instanceof FirestoreError && err.code === 'failed-precondition') {
+                // This is expected if already enabled or another tab has persistence
+             } else {
+                console.warn("[Firebase] Firestore: Error trying to enable network on existing instance:", err);
+             }
         });
-
-      } catch (firestoreError: any) {
-        console.error("[Firebase] Error initializing Firestore with persistence:", firestoreError);
-        if (firestoreError instanceof FirestoreError && firestoreError.code === 'failed-precondition') {
-             console.error("[Firebase] Firestore failed precondition - This often means another tab has persistence enabled or there was an issue initializing the cache. Trying fallback...");
-             // Attempt to clear persistence - USE WITH CAUTION IN PRODUCTION
-             // clearIndexedDbPersistence(db).then(() => {
-             //     console.log("[Firebase] Cleared IndexedDB persistence. Reloading might be required.");
-             // }).catch(clearErr => {
-             //     console.error("[Firebase] Failed to clear IndexedDB persistence:", clearErr);
-             // });
-        }
-        // Fallback to default initialization if persistence fails
-        db = getFirestore(app); // Get default instance
-        console.warn("[Firebase] Firestore initialized WITHOUT explicit persistence settings due to error.");
-      }
-
-      // Get Storage instance
-      storage = getStorage(app);
-
-      // Connect to emulators if configured
-      if (isEmulator) {
-        console.log("[Firebase] Connecting to Firebase Emulators...");
-        try {
-            // Default ports: Auth 9099, Firestore 8080, Storage 9199
-            connectAuthEmulator(auth, "http://localhost:9099", { disableWarnings: true });
-            connectFirestoreEmulator(db, 'localhost', 8080);
-            connectStorageEmulator(storage, 'localhost', 9199);
-            console.log("[Firebase] Connected to Firebase Emulators (Auth:9099, Firestore:8080, Storage:9199)");
-        } catch (emulatorError) {
-             console.error("[Firebase] Error connecting to Firebase Emulators:", emulatorError);
-             console.warn("[Firebase] Ensure Firebase Emulators are running. Run 'firebase emulators:start'.");
-        }
       }
 
       firebaseInitialized = true;
-      console.log("[Firebase] All Firebase services initialized for client.");
+      console.log("[Firebase] Initialization check complete.");
 
       // Add configuration warnings
        console.warn(
@@ -174,6 +157,10 @@ if (typeof window !== "undefined") {
        console.warn(
         "[Firebase] Firestore Rules Check: If you see Firestore permission errors (PERMISSION_DENIED or 400 Bad Request on Listen), verify your Firestore Security Rules allow reads/writes for logged-in users (e.g., /users/{userId})."
       );
+       // Warning about App Check / reCAPTCHA
+       console.warn(
+        "[Firebase] App Check / reCAPTCHA: If you encounter 'authInstance._getRecaptchaConfig is not a function', ensure Firebase App Check is correctly configured (or disabled) in the Firebase/Google Cloud Console for your project. Mismatched configurations can cause authentication failures."
+       );
 
 
     } catch (error: any) {
@@ -194,6 +181,7 @@ if (typeof window !== "undefined") {
       "[Firebase] CRITICAL: Firebase initialization FAILED. App functionality requiring Firebase will not work. Check console errors above for details (missing config, invalid keys, etc.)."
     );
     // Ensure dummies are assigned if initialization failed
+    app = app || ({} as FirebaseApp); // Ensure app is assigned even if error occurred before assignment
     auth = auth || ({} as Auth);
     db = db || ({} as Firestore);
     storage = storage || ({} as FirebaseStorage);
