@@ -7,7 +7,7 @@ import {
     collection, query, where, orderBy, limit, getDocs,
     Timestamp, FirestoreError, enableNetwork
 } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { db, firebaseInitialized } from '@/lib/firebase'; // Import firebaseInitialized
 import { useAuth } from '@/components/providers/auth-provider';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -26,7 +26,7 @@ interface ForecastItem {
     description: string; // Detailed explanation and actionable advice
     confidence?: number; // Optional: AI's confidence score (0-1)
     hashtags?: string[]; // Optional: Suggested hashtags
-    // Add other relevant fields like 'example_prompt', 'visual_style', etc.
+    saved?: boolean; // Derived client-side
 }
 
 // Represents the weekly forecast document stored in Firestore
@@ -36,12 +36,10 @@ interface WeeklyForecast {
     weekStartDate: Date; // Start date of the forecast week (e.g., Monday)
     generatedAt: Date; // Timestamp when the forecast was generated
     forecastItems: ForecastItem[];
-    // Optional: Add overall summary or revival suggestion here
     revivalSuggestion?: {
         title: string;
         description: string;
     };
-    saved?: boolean; // Derived client-side based on userData
 }
 
 // Represents the user's data in Firestore
@@ -56,7 +54,6 @@ interface UserData {
         status: string; // e.g., 'active', 'trialing', 'canceled'
     };
     savedForecastItemIds?: string[]; // Store IDs of saved individual forecast items
-    // Add other fields like slackWebhookUrl if needed
     isOffline?: boolean; // Flag added by fetch function
 }
 
@@ -66,11 +63,16 @@ interface UserData {
 // Fetch user data from Firestore
 async function fetchUserData(uid: string): Promise<UserData | null> {
     console.log(`DashboardPage: Fetching user data for UID: ${uid}`);
+    if (!firebaseInitialized || !db) {
+        console.error("DashboardPage: Firebase not initialized. Cannot fetch user data.");
+        throw new Error("Application not properly configured. Please reload.");
+    }
     const userDocRef = doc(db, "users", uid);
     let isOffline = false;
     try {
-        await enableNetwork(db);
-        console.log("DashboardPage: Network enabled for fetching user data.");
+        // Explicitly enable network before critical read
+        try { await enableNetwork(db); } catch (e) { console.warn("[Firebase] Network enable failed (might be ok):", e) }
+
         const userDocSnap = await getDoc(userDocRef);
         if (userDocSnap.exists()) {
             console.log("DashboardPage: User document found:", userDocSnap.data());
@@ -85,7 +87,8 @@ async function fetchUserData(uid: string): Promise<UserData | null> {
             isOffline = true;
             console.warn("DashboardPage: Firestore appears to be offline trying to fetch user data.");
             try {
-                const userDocSnap = await getDoc(userDocRef); // Try getting from cache
+                // Attempt fetch from cache with source option
+                const userDocSnap = await getDoc(userDocRef); // Try cache
                  if (userDocSnap.exists()) {
                     console.log("DashboardPage: User document found in cache (offline).", userDocSnap.data());
                     return { ...userDocSnap.data(), isOffline: true } as UserData; // Add offline flag
@@ -95,23 +98,28 @@ async function fetchUserData(uid: string): Promise<UserData | null> {
                  }
             } catch (cacheError) {
                  console.error("DashboardPage: Error fetching user data from cache:", cacheError);
+                 // Re-throw specific offline error
                  throw new Error("Could not load user data. You appear to be offline.");
             }
         }
-        throw error; // Rethrow other errors
+        // Rethrow other errors or a generic one
+        throw new Error(`Failed to fetch user data: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 
 // Fetch the latest weekly forecast for a specific niche
 async function fetchLatestForecastForNiche(niche: string): Promise<WeeklyForecast | null> {
     console.log(`DashboardPage: Fetching latest forecast for niche "${niche}" from Firestore...`);
+    if (!firebaseInitialized || !db) {
+         console.error("DashboardPage: Firebase not initialized. Cannot fetch forecast.");
+         throw new Error("Application not properly configured. Please reload.");
+    }
     if (!niche || niche.toLowerCase() === 'all') {
         console.log("DashboardPage: Cannot fetch forecast for 'all' niches directly. Requires a specific niche.");
         return null; // Or fetch the primary niche's forecast if logic requires
     }
 
     const forecastsCollection = collection(db, 'forecasts'); // Assuming 'forecasts' collection
-    // Query for the specific niche, ordered by week start date descending, limit 1
     const forecastQuery = query(
         forecastsCollection,
         where('niche', '==', niche),
@@ -126,8 +134,9 @@ async function fetchLatestForecastForNiche(niche: string): Promise<WeeklyForecas
     ].map(c => c.type + ': ' + JSON.stringify(c._queryOptions || c)));
 
     try {
-        await enableNetwork(db);
-        console.log("DashboardPage: Network enabled for fetching forecast.");
+        // Explicitly enable network before critical read
+        try { await enableNetwork(db); } catch (e) { console.warn("[Firebase] Network enable failed (might be ok):", e) }
+
         const querySnapshot = await getDocs(forecastQuery);
 
         if (querySnapshot.empty) {
@@ -152,7 +161,6 @@ async function fetchLatestForecastForNiche(niche: string): Promise<WeeklyForecas
             generatedAt: (data.generatedAt as Timestamp)?.toDate() || new Date(0),
             forecastItems: data.forecastItems as ForecastItem[], // Assuming items are stored correctly
             revivalSuggestion: data.revivalSuggestion,
-            // 'saved' status will be applied later
         };
         return forecast;
 
@@ -167,8 +175,8 @@ async function fetchLatestForecastForNiche(niche: string): Promise<WeeklyForecas
              throw new Error("Database query error: A required index is missing. Please check Firestore indexes or contact support.");
         } else if (error instanceof FirestoreError && (error.code === 'unavailable' || error.message.includes('offline'))) {
             console.warn("DashboardPage: Firestore query failed for forecast: Client appears to be offline.");
-             // Attempt to get from cache
             try {
+                 // Attempt fetch from cache with source option
                 const querySnapshot = await getDocs(forecastQuery);
                 if (!querySnapshot.empty) {
                     const docSnap = querySnapshot.docs[0];
@@ -178,6 +186,7 @@ async function fetchLatestForecastForNiche(niche: string): Promise<WeeklyForecas
                         return null;
                      }
                     console.log(`DashboardPage: Fetched forecast from Firestore cache (offline).`);
+                    // Add offline flag indirectly via UserData state
                     return {
                         id: docSnap.id,
                         niche: data.niche,
@@ -185,17 +194,19 @@ async function fetchLatestForecastForNiche(niche: string): Promise<WeeklyForecas
                         generatedAt: (data.generatedAt as Timestamp)?.toDate() || new Date(0),
                         forecastItems: data.forecastItems as ForecastItem[],
                         revivalSuggestion: data.revivalSuggestion,
-                         // isOffline: true, // Maybe add flag to forecast itself? Or rely on userData.isOffline
                     } as WeeklyForecast;
                 }
                  console.log(`DashboardPage: No forecast found in cache (offline).`);
-                return null;
+                 // Throw specific offline error to be caught by caller
+                 throw new Error("Could not load forecast. You appear to be offline.");
             } catch (cacheError) {
                  console.error("DashboardPage: Error fetching forecast from cache:", cacheError);
+                 // Re-throw specific offline error
                  throw new Error("Could not load forecast. You appear to be offline.");
             }
         }
-        throw error; // Re-throw other errors
+        // Rethrow other errors or a generic one
+         throw new Error(`Failed to fetch forecast: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 
@@ -225,7 +236,8 @@ export default function DashboardPage() {
           const data = await fetchUserData(user.uid);
           if (data) {
              setUserData(data);
-             setIsOfflineError(!!data.isOffline); // Set offline status from fetched data
+             // Set offline status based on fetch result or error type
+             setIsOfflineError(!!data.isOffline);
              if (data.isOffline) {
                 setError("Could not load fresh data. You appear to be offline.");
              } else {
@@ -240,7 +252,10 @@ export default function DashboardPage() {
           console.error("DashboardPage: Error fetching user data in useEffect:", err);
           const errorMessage = err.message || "Could not load user information.";
           setError(errorMessage);
-          if (errorMessage.includes("offline")) setIsOfflineError(true);
+          // Explicitly check for offline error message
+          if (errorMessage.includes("offline")) {
+             setIsOfflineError(true);
+          }
         } finally {
           setLoadingUser(false);
           console.log("DashboardPage: Finished loading user data attempt.");
@@ -267,7 +282,6 @@ export default function DashboardPage() {
           console.log(`DashboardPage: User has selected niches. Fetching forecast for: "${nicheToFetch}"`);
       } else {
           console.log("DashboardPage: User has no selected niches. Cannot fetch specific forecast.");
-          // Display a message prompting user to select niches
           setError(prevError => prevError || "Please select at least one niche in settings to view forecasts.");
           setLoadingForecast(false);
           setLatestForecast(null); // Clear any previous forecast
@@ -283,16 +297,16 @@ export default function DashboardPage() {
 
       const loadForecast = async () => {
             setLoadingForecast(true);
-            if (!isOfflineError) { // Don't clear offline errors
-                setError(null);
-                setIsIndexError(false);
+            // Don't clear offline errors if already set by user data fetch
+            if (!isOfflineError) {
+                 setError(null);
+                 setIsIndexError(false);
             }
 
             try {
               const forecastData = await fetchLatestForecastForNiche(nicheToFetch!); // Fetch for the determined niche
 
               if (forecastData) {
-                  // Apply saved status to each forecast item
                   const savedIds = userData?.savedForecastItemIds || [];
                   const itemsWithSaveStatus = forecastData.forecastItems.map(item => ({
                      ...item,
@@ -300,7 +314,7 @@ export default function DashboardPage() {
                   }));
                   setLatestForecast({ ...forecastData, forecastItems: itemsWithSaveStatus });
                   console.log("DashboardPage: Forecast loaded and processed successfully.");
-                  // If forecast fetch succeeds, potentially clear offline error IF user data also succeeded online
+                  // If forecast fetch succeeds and user data was fetched online, clear errors
                   if (!userData.isOffline) {
                       setIsOfflineError(false);
                       setError(null);
@@ -308,22 +322,24 @@ export default function DashboardPage() {
               } else {
                   console.log("DashboardPage: No forecast available for the selected niche currently.");
                   setLatestForecast(null);
-                  setError(prev => prev || `No forecast found for "${nicheToFetch}". Check back next week or select a different niche.`);
-                   if (!userData.isOffline) { // Clear offline error if no forecast found but online
-                       setIsOfflineError(false);
-                   }
+                  // Keep existing offline error if present, otherwise show no forecast message
+                  setError(prev => isOfflineError ? prev : `No forecast found for "${nicheToFetch}". Check back next week or select a different niche.`);
+                  if (!userData.isOffline) { // Clear offline error if no forecast found but user data was online
+                      setIsOfflineError(false);
+                  }
               }
 
             } catch (err: any) {
               console.error("DashboardPage: Error fetching or processing forecast:", err);
               const errorMessage = err.message || "Could not load the latest forecast.";
               setError(errorMessage);
-              if (errorMessage.includes("offline")) {
+               // Explicitly check for offline error message
+               if (errorMessage.includes("offline")) {
                   setIsOfflineError(true);
-              } else if (errorMessage.includes("index is missing")) {
-                  setIsIndexError(true);
-                  setIsOfflineError(false); // Ensure offline is false if it's an index error
-              }
+               } else if (errorMessage.includes("index is missing")) {
+                   setIsIndexError(true);
+                   setIsOfflineError(false); // Ensure offline is false if it's an index error
+               }
               setLatestForecast(null); // Clear forecast on error
             } finally {
               setLoadingForecast(false);
@@ -333,13 +349,14 @@ export default function DashboardPage() {
       loadForecast();
 
     } else if (!loadingUser && !userData && user && !isOfflineError) {
-        console.log("DashboardPage: User data failed to load, skipping forecast fetch.");
+        // This case means user exists, loading done, but userData is null and it's NOT an offline error
+        console.log("DashboardPage: User data failed to load (not offline), skipping forecast fetch.");
         setLoadingForecast(false);
     } else if (!user) {
         console.log("DashboardPage: No user, skipping forecast fetch.");
         setLoadingForecast(false);
     }
- }, [userData, loadingUser]); // Rerun when userData or loadingUser changes
+ }, [userData, loadingUser, isOfflineError]); // Added isOfflineError dependency to potentially re-trigger fetches if status changes
 
 
  // --- Actions ---
@@ -349,11 +366,11 @@ export default function DashboardPage() {
 
     const isPaid = userData.subscription?.plan === 'paid';
     if (!isPaid) {
-        alert("Saving forecast items is a premium feature. Please upgrade your plan.");
+        toast({ title: "Upgrade Required", description: "Saving forecasts is a premium feature.", variant: "destructive"});
         return;
     }
      if (isOfflineError) {
-        alert("Cannot save items while offline.");
+        toast({ title: "Offline", description: "Cannot save items while offline.", variant: "destructive"});
         return;
      }
 
@@ -361,7 +378,7 @@ export default function DashboardPage() {
     const currentlySaved = (userData.savedForecastItemIds || []).includes(itemId);
     const newSavedState = !currentlySaved;
 
-    // Optimistic UI update for the specific item
+    // Optimistic UI update
     setLatestForecast(prevForecast => {
         if (!prevForecast) return null;
         return {
@@ -371,7 +388,6 @@ export default function DashboardPage() {
             )
         };
     });
-    // Also update userData state optimistically
     setUserData((prev: UserData | null) => {
         if (!prev) return null;
         const currentSavedIds = prev.savedForecastItemIds || [];
@@ -386,12 +402,14 @@ export default function DashboardPage() {
 
     // Firestore update
     try {
+        if (!firebaseInitialized || !db) throw new Error("Firebase not initialized");
         const userDocRef = doc(db, "users", user.uid);
         await updateDoc(userDocRef, {
             savedForecastItemIds: newSavedState ? arrayUnion(itemId) : arrayRemove(itemId)
         });
          console.log(`Forecast item ${itemId} ${newSavedState ? 'saved' : 'unsaved'} successfully.`);
-    } catch (firestoreError) {
+         toast({ title: "Success", description: `Item ${newSavedState ? 'saved' : 'unsaved'}.` });
+    } catch (firestoreError: any) {
         console.error("Failed to update saved forecast item in Firestore:", firestoreError);
         // Revert optimistic UI update on error
          setLatestForecast(prevForecast => {
@@ -413,7 +431,7 @@ export default function DashboardPage() {
                      : currentSavedIds.filter((id: string) => id !== itemId), // Remove if addition failed
              };
          });
-        alert(`Failed to ${newSavedState ? 'save' : 'unsave'} forecast item. Please try again.`);
+        toast({ title: "Error", description: `Failed to ${newSavedState ? 'save' : 'unsave'} item. ${firestoreError.message}`, variant: "destructive"});
     }
   };
 
@@ -433,12 +451,16 @@ export default function DashboardPage() {
 
     // --- Error State ---
     // Display primary error if exists (user or forecast related)
-    if (error && !loadingUser) { // Show error once user loading is done
+    // Show offline error slightly differently
+    if (error && !loadingUser) {
         const title = isOfflineError ? "Offline Notice" : (isIndexError ? "Database Query Error" : "Error Loading Dashboard");
+        const variant = isOfflineError ? "default" : "destructive";
+        const icon = isOfflineError ? <WifiOff className="h-4 w-4 text-yellow-600 dark:text-yellow-400" /> : (isIndexError ? <HelpCircle className="h-4 w-4"/> : null);
+
         return (
              <div className="space-y-6">
-                 <Alert variant={isOfflineError ? "default" : "destructive"} className={isOfflineError ? "border-yellow-500/50 bg-yellow-50/50 dark:bg-yellow-900/10" : ""}>
-                      {isOfflineError ? <WifiOff className="h-4 w-4 text-yellow-600 dark:text-yellow-400" /> : (isIndexError ? <HelpCircle className="h-4 w-4"/> : null)}
+                 <Alert variant={variant} className={isOfflineError ? "border-yellow-500/50 bg-yellow-50/50 dark:bg-yellow-900/10" : ""}>
+                      {icon}
                      <AlertTitle>{title}</AlertTitle>
                      <AlertDescription>
                          {error}
@@ -456,7 +478,7 @@ export default function DashboardPage() {
                          )}
                      </AlertDescription>
                  </Alert>
-                  {/* Optionally show basic welcome if offline but have user data */}
+                  {/* Show basic welcome if offline but have user data */}
                   {userData && isOfflineError && (
                      <div className="opacity-70 pointer-events-none">
                          <Card>
@@ -506,6 +528,7 @@ export default function DashboardPage() {
 
   // --- Main Dashboard Content ---
   if (userData) { // Render main content if user data exists (even if offline/cached)
+      const currentNicheDisplay = latestForecast?.niche || userData.primaryNiche || userData.selectedNiches?.[0] || "N/A";
       return (
         <div className="space-y-6">
           {/* Welcome Card & Prompts */}
@@ -539,7 +562,8 @@ export default function DashboardPage() {
                )}
                {userData?.selectedNiches && userData.selectedNiches.length > 0 && (
                    <p className="mt-4 text-sm text-muted-foreground">
-                     Currently viewing forecast for: <span className="font-semibold">{latestForecast?.niche || userData.primaryNiche || userData.selectedNiches[0]}</span>
+                     Currently viewing forecast for: <span className="font-semibold">{currentNicheDisplay}</span>
+                     {isPaidUser && <Link href="/dashboard/settings" className="ml-2 text-xs text-accent hover:underline">(Change)</Link>}
                    </p>
                )}
             </CardContent>
@@ -557,6 +581,7 @@ export default function DashboardPage() {
                       ? `Predictions for ${latestForecast.niche} (Week of ${latestForecast.weekStartDate.toLocaleDateString()})`
                       : (userData?.selectedNiches?.length > 0 ? "Loading forecast..." : "Select a niche in settings")
                    }
+                   {latestForecast && <span className="text-xs block mt-1">Generated {formatDistanceToNow(latestForecast.generatedAt, { addSuffix: true })}</span>}
                 </CardDescription>
               </div>
                <Link href="/dashboard/forecasts">
@@ -611,13 +636,15 @@ export default function DashboardPage() {
                         </li>
                    )}
                 </ul>
-              ) : ( // No Forecast Data (and not loading, not error)
-                <p className="text-center text-muted-foreground py-8">
-                    {isOfflineError
-                        ? "Cannot load forecast while offline."
-                        : (isLoading ? "Loading..." : `No forecast available for this niche yet. Check back next Monday!`)
-                    }
-                </p>
+              ) : ( // No Forecast Data (and not loading, not error set by user fetch)
+                !error && !isLoading && ( // Only show 'No forecast' if there isn't another error displayed
+                    <p className="text-center text-muted-foreground py-8">
+                        {isOfflineError
+                            ? "Cannot load forecast while offline."
+                            : (userData?.selectedNiches?.length === 0 ? "Select a niche in settings first." : `No forecast available for "${currentNicheDisplay}" yet. Check back next Monday!`)
+                        }
+                    </p>
+                )
               )}
             </CardContent>
           </Card>
@@ -632,3 +659,7 @@ export default function DashboardPage() {
         );
   }
 }
+
+// Added useToast import
+import { useToast } from '@/hooks/use-toast';
+const { toast } = useToast(); // Call useToast at the top level

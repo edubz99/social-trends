@@ -7,7 +7,7 @@ import {
     collection, query, where, orderBy, limit, getDocs,
     Timestamp, FirestoreError, enableNetwork
 } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { db, firebaseInitialized } from '@/lib/firebase'; // Import firebaseInitialized
 import { useAuth } from '@/components/providers/auth-provider';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -15,8 +15,9 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Bookmark, Filter, Calendar, WifiOff, HelpCircle, BrainCircuit } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { format, startOfWeek, subWeeks } from 'date-fns'; // For date formatting and calculations
+import { format, startOfWeek, subWeeks, formatDistanceToNow } from 'date-fns'; // Added formatDistanceToNow
 import { Label } from '@/components/ui/label';
+import { useToast } from '@/hooks/use-toast'; // Import useToast
 
 // --- Data Structures (Mirror dashboard page for consistency) ---
 
@@ -58,9 +59,13 @@ interface UserData {
 // Fetch user data (simplified for this page's needs)
 async function fetchUserDataForFilters(uid: string): Promise<UserData | null> {
     console.log(`ForecastsPage: Fetching user data for filters for UID: ${uid}`);
+    if (!firebaseInitialized || !db) {
+         console.error("ForecastsPage: Firebase not initialized. Cannot fetch user data.");
+         throw new Error("Application not properly configured.");
+    }
     const userDocRef = doc(db, "users", uid);
     try {
-        await enableNetwork(db);
+        try { await enableNetwork(db); } catch(e) { console.warn("[Firebase] Network enable failed (might be ok):", e) }
         const userDocSnap = await getDoc(userDocRef);
         if (userDocSnap.exists()) {
             const data = userDocSnap.data();
@@ -80,9 +85,12 @@ async function fetchUserDataForFilters(uid: string): Promise<UserData | null> {
                  if (userDocSnap.exists()) {
                      return { ...userDocSnap.data(), isOffline: true } as UserData;
                  } else { throw new Error("Offline and no cached user data."); }
-             } catch (cacheError) { throw new Error("Could not load user data (offline)."); }
+             } catch (cacheError) {
+                  console.error("ForecastsPage: Error fetching user data from cache:", cacheError);
+                  throw new Error("Could not load user data (offline).");
+             }
          }
-        throw error;
+        throw new Error(`Failed to fetch user data: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 
@@ -93,6 +101,10 @@ async function fetchForecastsWithFilters(
     count: number = 10 // Fetch more for history, adjust as needed
 ): Promise<WeeklyForecast[]> {
     console.log(`ForecastsPage: Fetching forecasts with filters:`, filters);
+     if (!firebaseInitialized || !db) {
+         console.error("ForecastsPage: Firebase not initialized. Cannot fetch forecasts.");
+         throw new Error("Application not properly configured.");
+    }
     const forecastsCollection = collection(db, 'forecasts');
     const queryConstraints = [];
 
@@ -100,14 +112,12 @@ async function fetchForecastsWithFilters(
     if (filters.niche && filters.niche.toLowerCase() !== 'all') {
         queryConstraints.push(where('niche', '==', filters.niche));
     } else {
-        // Potentially handle 'all' for paid users - might need multiple queries or broader index
-        // For now, 'all' might mean fetch primary niche or just don't filter by niche
-        // Let's assume 'all' means no niche filter for simplicity here, but requires indexing
+        // For 'all' or no niche filter, requires indexing or multiple queries.
+        // Assuming 'all' means no niche filter, requiring index on 'weekStartDate' only.
         console.log("Fetching for 'all' niches (requires appropriate indexes)");
     }
 
-    // Filter by Start Date (Fetch forecasts generated ON or AFTER this date)
-    // Since we order by date descending, using >= startDate means we get recent ones first
+    // Filter by Start Date
     if (filters.startDate) {
         console.log(`Applying date filter: weekStartDate >= ${filters.startDate.toISOString()}`);
         queryConstraints.push(where('weekStartDate', '>=', Timestamp.fromDate(filters.startDate)));
@@ -123,8 +133,8 @@ async function fetchForecastsWithFilters(
     const forecastsQuery = query(forecastsCollection, ...queryConstraints);
 
     try {
-        await enableNetwork(db);
-        console.log("ForecastsPage: Network enabled for fetching forecasts.");
+         try { await enableNetwork(db); } catch(e) { console.warn("[Firebase] Network enable failed (might be ok):", e) }
+        console.log("ForecastsPage: Attempting to fetch forecasts from Firestore...");
         const querySnapshot = await getDocs(forecastsQuery);
         const forecasts: WeeklyForecast[] = [];
         querySnapshot.forEach((docSnap) => {
@@ -149,13 +159,12 @@ async function fetchForecastsWithFilters(
         if (error instanceof FirestoreError && error.code === 'failed-precondition') {
              console.error(
                 "Firestore query failed: Missing index. " +
-                `Index likely needed on 'forecasts' collection: ${filters.niche !== 'all' ? `'niche' (ASC/DESC), ` : ''}'weekStartDate' (DESC). ` +
+                `Index likely needed on 'forecasts' collection: ${filters.niche && filters.niche !== 'all' ? `'niche' (ASC/DESC), ` : ''}'weekStartDate' (DESC). ` +
                 "Check Firestore console."
              );
              throw new Error("Database query error: A required index is missing.");
         } else if (error instanceof FirestoreError && (error.code === 'unavailable' || error.message.includes('offline'))) {
-             console.warn("ForecastsPage: Firestore query failed: Client offline.");
-             // Attempt cache fetch
+             console.warn("ForecastsPage: Firestore query failed: Client offline. Attempting cache...");
              try {
                  const querySnapshot = await getDocs(forecastsQuery);
                  const forecasts: WeeklyForecast[] = [];
@@ -171,13 +180,15 @@ async function fetchForecastsWithFilters(
                      });
                  });
                  console.log(`ForecastsPage: Fetched ${forecasts.length} forecasts from cache (offline).`);
-                 return forecasts;
+                 // Throw specific offline error to be handled by caller
+                 throw new Error("Could not load forecasts (offline).");
              } catch (cacheError) {
                  console.error("ForecastsPage: Error fetching forecasts from cache:", cacheError);
                  throw new Error("Could not load forecasts (offline).");
              }
         }
-        throw error; // Rethrow other errors
+        // Rethrow other errors or a generic one
+        throw new Error(`Failed to fetch forecasts: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 
@@ -192,6 +203,7 @@ const DATE_RANGE_OPTIONS = [
 
 export default function ForecastsPage() {
   const { user } = useAuth();
+  const { toast } = useToast(); // Use the toast hook
   const [userData, setUserData] = useState<UserData | null>(null);
   const [displayedForecasts, setDisplayedForecasts] = useState<WeeklyForecast[]>([]);
   const [loadingUser, setLoadingUser] = useState(true);
@@ -216,16 +228,24 @@ export default function ForecastsPage() {
             .then(data => {
                 setUserData(data);
                 setIsOfflineError(!!data?.isOffline);
-                if (data?.isOffline) setError("Could not load user data (offline).");
+                if (data?.isOffline) {
+                    setError("Could not load user data (offline)."); // Set error if offline
+                } else {
+                    setError(null); // Clear error if online
+                }
                 // Set initial niche based on primary or first selected
                 const initialNiche = data?.primaryNiche && data?.selectedNiches?.includes(data.primaryNiche) ? data.primaryNiche : (data?.selectedNiches?.[0] || 'all');
-                // If user is free and has multiple niches somehow, default to 'all' or first
                 const plan = data?.subscription?.plan || 'free';
-                setSelectedNiche(plan === 'free' && initialNiche !== 'all' ? initialNiche : 'all'); // Free user defaults to first niche or 'all'
+                 // Free user forced to their single niche, Paid user defaults to 'all' or their primary
+                const nicheForPlan = plan === 'free'
+                    ? (data?.selectedNiches?.[0] || 'all')
+                    : (initialNiche || 'all');
+                setSelectedNiche(nicheForPlan);
             })
             .catch(err => {
                 setError(err.message || "Could not load user information.");
                 if (err.message.includes("offline")) setIsOfflineError(true);
+                else setIsOfflineError(false);
             })
             .finally(() => setLoadingUser(false));
     } else { setLoadingUser(false); setLoadingForecasts(false); }
@@ -235,21 +255,20 @@ export default function ForecastsPage() {
   useEffect(() => {
     if (!user || loadingUser || !userData) {
         if (!loadingUser && !userData && !isOfflineError && user) {
-            console.log("ForecastsPage: User data not ready, skipping forecast fetch.");
+            console.log("ForecastsPage: User data not ready or failed, skipping forecast fetch.");
         }
+        // Don't clear error here, let user fetch error persist if it exists
         setLoadingForecasts(false);
         return;
     }
 
-    // For free users, force filter to their single niche (or 'all' if none selected)
+    // For free users, force filter to their single niche
     let nicheToFetch = selectedNiche;
     if (userData.subscription?.plan === 'free') {
         nicheToFetch = userData.selectedNiches?.[0] || 'all';
         if (selectedNiche !== nicheToFetch) {
-            // This condition might happen briefly if state updates aren't instant.
-            // Or if a free user somehow had 'all' selected. Force it.
+            // If state is inconsistent, update it and wait for re-run
             setSelectedNiche(nicheToFetch);
-            // Don't fetch yet, wait for state update triggered re-run.
             return;
         }
     }
@@ -257,21 +276,20 @@ export default function ForecastsPage() {
 
     const loadForecasts = async () => {
         setLoadingForecasts(true);
-        if (!isOfflineError) { setError(null); setIsIndexError(false); }
+        // Don't clear offline/index error if it's already set
+        if (!isOfflineError && !isIndexError) { setError(null); }
 
-        // Calculate start date based on selected range
         const selectedRangeOption = DATE_RANGE_OPTIONS.find(o => o.value === selectedDateRange);
-        const weeksToSubtract = selectedRangeOption?.weeksAgo || 4; // Default to 4 weeks
-        const cutoffDate = startOfWeek(subWeeks(new Date(), weeksToSubtract), { weekStartsOn: 1 }); // Monday as start
+        const weeksToSubtract = selectedRangeOption?.weeksAgo || 4;
+        const cutoffDate = startOfWeek(subWeeks(new Date(), weeksToSubtract), { weekStartsOn: 1 });
 
         try {
             const currentFilters = {
-                niche: nicheToFetch,
+                niche: nicheToFetch === 'all' ? undefined : nicheToFetch, // Pass undefined if 'all'
                 startDate: cutoffDate
             };
             const fetchedForecasts = await fetchForecastsWithFilters(currentFilters);
 
-             // Apply saved status to each item within each forecast
              const savedIds = userData?.savedForecastItemIds || [];
              const forecastsWithSaveStatus = fetchedForecasts.map(forecast => ({
                  ...forecast,
@@ -281,14 +299,20 @@ export default function ForecastsPage() {
                  }))
              }));
 
-
             setDisplayedForecasts(forecastsWithSaveStatus);
-            if (!userData.isOffline) { setIsOfflineError(false); setError(null); } // Clear error if success online
+            // Clear errors ONLY if this fetch succeeded AND user data was also fetched online
+            if (!userData.isOffline) {
+                setIsOfflineError(false);
+                setIsIndexError(false);
+                setError(null);
+            }
 
         } catch (err: any) {
-             setError(err.message || "Could not load forecasts.");
-             if (err.message.includes("offline")) setIsOfflineError(true);
-             else if (err.message.includes("index is missing")) { setIsIndexError(true); setIsOfflineError(false); }
+             const errorMessage = err.message || "Could not load forecasts.";
+             setError(errorMessage);
+             if (errorMessage.includes("offline")) { setIsOfflineError(true); setIsIndexError(false); }
+             else if (errorMessage.includes("index is missing")) { setIsIndexError(true); setIsOfflineError(false); }
+             else { setIsOfflineError(false); setIsIndexError(false); } // Other errors
              setDisplayedForecasts([]);
         } finally {
             setLoadingForecasts(false);
@@ -301,14 +325,16 @@ export default function ForecastsPage() {
 
   // Save/Unsave Action (identical to dashboard page)
  const handleSaveForecastItem = async (itemId: string, forecastId: string) => {
-    if (!user || !userData || isOfflineError) {
-        if (isOfflineError) alert("Cannot save items while offline.");
-        return;
-    }
+    if (!user || !userData) return; // Basic checks
 
     const isPaid = userData.subscription?.plan === 'paid';
     if (!isPaid) {
-        alert("Saving forecast items is a premium feature."); return;
+        toast({ title: "Upgrade Required", description: "Saving forecasts is a premium feature.", variant: "destructive" });
+        return;
+    }
+    if (isOfflineError) {
+        toast({ title: "Offline", description: "Cannot save items while offline.", variant: "destructive" });
+        return;
     }
 
     const currentlySaved = (userData.savedForecastItemIds || []).includes(itemId);
@@ -326,10 +352,12 @@ export default function ForecastsPage() {
 
     // Firestore Update
     try {
+        if (!firebaseInitialized || !db) throw new Error("Firebase not initialized");
         const userDocRef = doc(db, "users", user.uid);
         await updateDoc(userDocRef, { savedForecastItemIds: newSavedState ? arrayUnion(itemId) : arrayRemove(itemId) });
         console.log(`Forecast item ${itemId} ${newSavedState ? 'saved' : 'unsaved'}.`);
-    } catch (error) {
+         toast({ title: "Success", description: `Item ${newSavedState ? 'saved' : 'unsaved'}.` });
+    } catch (error: any) {
         console.error("Failed to update saved forecast item:", error);
         // Revert Optimistic Update
         setDisplayedForecasts(prevForecasts =>
@@ -340,7 +368,7 @@ export default function ForecastsPage() {
             )
         );
          setUserData(prev => prev ? { ...prev, savedForecastItemIds: currentlySaved ? [...(prev.savedForecastItemIds || []), itemId] : (prev.savedForecastItemIds || []).filter(id => id !== itemId) } : null);
-        alert(`Failed to ${newSavedState ? 'save' : 'unsave'} item. Try again.`);
+        toast({ title: "Error", description: `Failed to ${newSavedState ? 'save' : 'unsave'} item. ${error.message}`, variant: "destructive"});
     }
  };
 
@@ -349,6 +377,7 @@ export default function ForecastsPage() {
 
   const isLoading = loadingUser || loadingForecasts;
   const isPaidUser = userData?.subscription?.plan === 'paid';
+  const showFilters = !loadingUser && userData; // Show filters only if user data loaded
 
   return (
     <div className="space-y-6">
@@ -359,54 +388,56 @@ export default function ForecastsPage() {
         </CardHeader>
         <CardContent>
           {/* Filters Section */}
-          <div className="flex flex-col sm:flex-row gap-4 mb-6 p-4 border rounded-lg bg-muted/50">
-             {/* Niche Filter */}
-             <div className="flex-1 space-y-2">
-                <Label htmlFor="niche-filter">Niche</Label>
-                <Select
-                    value={selectedNiche}
-                    onValueChange={setSelectedNiche}
-                    disabled={isLoading || isOfflineError || !isPaidUser || nicheOptions.length <= 1} // Disabled if not paid or only 'all'/'one' option
-                >
-                    <SelectTrigger id="niche-filter">
-                        <SelectValue placeholder="Filter by niche" />
-                    </SelectTrigger>
-                    <SelectContent>
-                        {nicheOptions.map((niche) => (
-                            <SelectItem key={niche} value={niche} disabled={!isPaidUser && niche !== 'all' && niche !== userData?.selectedNiches?.[0]}>
-                                {niche === 'all' ? 'All Niches' : niche}
-                                {!isPaidUser && niche !== 'all' && niche !== userData?.selectedNiches?.[0] && " (Premium)"}
-                            </SelectItem>
-                        ))}
-                    </SelectContent>
-                </Select>
-                 {!isPaidUser && <p className="text-xs text-muted-foreground pt-1">Upgrade to filter by multiple niches.</p>}
-             </div>
+          {showFilters && (
+             <div className="flex flex-col sm:flex-row gap-4 mb-6 p-4 border rounded-lg bg-muted/50">
+                 {/* Niche Filter */}
+                 <div className="flex-1 space-y-2">
+                    <Label htmlFor="niche-filter">Niche</Label>
+                    <Select
+                        value={selectedNiche}
+                        onValueChange={setSelectedNiche}
+                        disabled={isLoading || isOfflineError || !isPaidUser || nicheOptions.length <= 1}
+                    >
+                        <SelectTrigger id="niche-filter">
+                            <SelectValue placeholder="Filter by niche" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {nicheOptions.map((niche) => (
+                                <SelectItem key={niche} value={niche} disabled={!isPaidUser && niche !== 'all' && niche !== userData?.selectedNiches?.[0]}>
+                                    {niche === 'all' ? 'All Your Niches' : niche}
+                                    {!isPaidUser && niche !== 'all' && niche !== userData?.selectedNiches?.[0] && " (Premium required)"}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                     {!isPaidUser && <p className="text-xs text-muted-foreground pt-1">Upgrade to filter by multiple niches.</p>}
+                 </div>
 
-             {/* Date Range Filter */}
-             <div className="flex-1 space-y-2">
-                <Label htmlFor="date-filter">Date Range</Label>
-                 <Select
-                    value={selectedDateRange}
-                    onValueChange={setSelectedDateRange}
-                    disabled={isLoading || isOfflineError}
-                 >
-                    <SelectTrigger id="date-filter">
-                        <SelectValue placeholder="Filter by date" />
-                    </SelectTrigger>
-                    <SelectContent>
-                        {DATE_RANGE_OPTIONS.map((range) => (
-                            <SelectItem key={range.value} value={range.value}>
-                                {range.label}
-                            </SelectItem>
-                        ))}
-                    </SelectContent>
-                </Select>
-             </div>
-          </div>
+                 {/* Date Range Filter */}
+                 <div className="flex-1 space-y-2">
+                    <Label htmlFor="date-filter">Date Range</Label>
+                     <Select
+                        value={selectedDateRange}
+                        onValueChange={setSelectedDateRange}
+                        disabled={isLoading || isOfflineError}
+                     >
+                        <SelectTrigger id="date-filter">
+                            <SelectValue placeholder="Filter by date" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {DATE_RANGE_OPTIONS.map((range) => (
+                                <SelectItem key={range.value} value={range.value}>
+                                    {range.label}
+                                </SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                 </div>
+              </div>
+          )}
 
-          {/* Forecasts List or Loading/Error State */}
-          {error && ( // Display errors
+          {/* Error Display */}
+          {error && !loadingUser && (
               <Alert variant={isOfflineError ? "default" : "destructive"} className={isOfflineError ? "border-yellow-500/50 bg-yellow-50/50 dark:bg-yellow-900/10" : ""}>
                  {isOfflineError ? <WifiOff className="h-4 w-4 text-yellow-600 dark:text-yellow-400" /> : (isIndexError ? <HelpCircle className="h-4 w-4" /> : null)}
                  <AlertTitle>{isOfflineError ? "Offline" : (isIndexError ? "Database Query Error" : "Error")}</AlertTitle>
@@ -418,7 +449,8 @@ export default function ForecastsPage() {
               </Alert>
           )}
 
-          {isLoading ? ( // Skeleton Loading
+          {/* Loading or Content Display */}
+          {isLoading ? ( // --- Skeleton Loading ---
             <div className="space-y-6 mt-4">
               {[...Array(2)].map((_, forecastIndex) => (
                  <Card key={forecastIndex}>
@@ -438,7 +470,7 @@ export default function ForecastsPage() {
                  </Card>
               ))}
             </div>
-          ) : !error || (isOfflineError && displayedForecasts.length > 0) ? ( // Display Forecasts List
+          ) : (!error || (isOfflineError && displayedForecasts.length > 0)) ? ( // --- Display Forecasts List (Show if no error OR if offline but have cached data) ---
             displayedForecasts.length > 0 ? (
                 <div className="space-y-6 mt-4">
                 {displayedForecasts.map((forecast) => (
@@ -492,12 +524,12 @@ export default function ForecastsPage() {
                     </Card>
                 ))}
                 </div>
-            ) : ( // No Forecasts Found
+            ) : ( // --- No Forecasts Found (and not loading/error) ---
                 <p className="text-center text-muted-foreground py-8 mt-4">
                     {isOfflineError ? "Cannot load forecasts while offline." : "No forecasts match your filters for this period."}
                 </p>
             )
-          ) : ( // Error state without offline cache
+          ) : ( // --- Final Fallback (Error state without offline cache, or other unexpected state) ---
              !isLoading && <p className="text-center text-muted-foreground py-8 mt-4">Could not load forecasts due to an error.</p>
           )}
         </CardContent>
